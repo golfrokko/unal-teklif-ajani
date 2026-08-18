@@ -12,11 +12,17 @@ const statusNames = {
   submitted: "Sorgu gönderildi",
   collecting: "Teklifler toplanıyor",
   waiting_otp: "SMS kodu bekliyor",
+  retrying: "Yeniden deneniyor",
   completed: "Tamamlandı",
   no_offer: "Teklif yok",
   skipped_sms: "SMS nedeniyle atlandı",
   mapping_required: "Adaptör eşlemesi gerekli",
+  auth_required: "Portal oturumu gerekli",
   manual_required: "Manuel işlem gerekli",
+  rate_limited: "Portal hız sınırı",
+  timeout: "Zaman aşımı",
+  cancelled: "İptal edildi",
+  interrupted: "Sunucu yeniden başladı",
   error: "Hata",
 };
 
@@ -30,6 +36,25 @@ const elements = Object.fromEntries([
 let portals = [];
 let activeJobId = null;
 let pollTimer = null;
+
+async function fetchJson(url, options = {}, timeoutMs = 15000) {
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, { ...options, signal: controller.signal });
+    const contentType = response.headers.get("content-type") || "";
+    const body = contentType.includes("application/json")
+      ? await response.json()
+      : { error: (await response.text()).slice(0, 240) || `HTTP ${response.status}` };
+    if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`);
+    return body;
+  } catch (error) {
+    if (error.name === "AbortError") throw new Error("Sorgu sunucusu 15 saniye içinde yanıt vermedi.");
+    throw error;
+  } finally {
+    window.clearTimeout(timeout);
+  }
+}
 
 function parseVehicleData(raw) {
   return {
@@ -101,7 +126,7 @@ function renderPortals() {
     <article class="portal-group">
       <h4>${group} • ${items.length}</h4>
       <div class="portal-items">
-        ${items.map((portal) => `<label class="portal-check"><input type="checkbox" value="${portal.id}" checked /><span></span><div><strong>${portal.name}</strong><small>${portal.verifiedForm ? "Form bulundu" : "İlk sorguda eşleme testi"}</small></div></label>`).join("")}
+        ${items.map((portal) => `<label class="portal-check"><input type="checkbox" value="${portal.id}" ${portal.enabled ? "checked" : "disabled"} /><span></span><div><strong>${portal.name}</strong><small>${portal.enabled ? (portal.integrationStatus === "verified" ? "Canlı doğrulandı" : "Adaptör testi gerekli") : "Devre dışı"}</small></div></label>`).join("")}
       </div>
     </article>
   `).join("");
@@ -110,12 +135,12 @@ function renderPortals() {
 
 function renderProgress(job) {
   const states = Object.values(job.portalStates || {});
-  const doneStatuses = ["completed", "no_offer", "skipped_sms", "mapping_required", "manual_required", "error"];
+  const doneStatuses = ["completed", "no_offer", "skipped_sms", "mapping_required", "auth_required", "manual_required", "rate_limited", "timeout", "error", "cancelled", "interrupted"];
   const done = states.filter((state) => doneStatuses.includes(state.status)).length;
   elements.progress.classList.remove("hidden");
   elements["progress-title"].textContent = `${done} / ${states.length} portal tamamlandı`;
   elements["progress-subtitle"].textContent = job.mode === "no_sms" ? "SMS isteyen portallar otomatik atlanıyor." : "SMS isteyen portallar kod baloncuğunda bekliyor.";
-  elements["job-status"].textContent = job.status === "completed" ? "Sorgu tamamlandı" : "Sorgulanıyor";
+  elements["job-status"].textContent = ({ completed: "Sorgu tamamlandı", partial: "Kısmi tamamlandı", failed: "Sorgu başarısız", cancelled: "İptal edildi", interrupted: "Kesintiye uğradı" })[job.status] || "Sorgulanıyor";
   elements["progress-list"].innerHTML = states.map((state) => `
     <article class="progress-row" data-status="${state.status}">
       <i></i><div><strong>${state.portalName}</strong><small>${state.message || statusNames[state.status] || state.status}</small></div><b>${statusNames[state.status] || state.status}</b>
@@ -174,13 +199,11 @@ async function submitOtp(event) {
 async function pollJob() {
   if (!activeJobId) return;
   try {
-    const response = await fetch(`/api/jobs/${activeJobId}`);
-    const job = await response.json();
-    if (!response.ok) throw new Error(job.error || "Sorgu durumu alınamadı");
+    const job = await fetchJson(`/api/jobs/${activeJobId}`, {}, 10000);
     renderProgress(job);
     renderOtp(job);
     renderResults(job);
-    if (job.status === "completed" || job.status === "failed") {
+    if (["completed", "partial", "failed", "cancelled", "interrupted"].includes(job.status)) {
       window.clearInterval(pollTimer);
       pollTimer = null;
       elements["start-button"].disabled = false;
@@ -201,13 +224,11 @@ async function startJob() {
   elements["start-button"].disabled = true;
   elements["start-button"].textContent = "Sorgu başlatılıyor...";
   try {
-    const response = await fetch("/api/jobs", {
+    const body = await fetchJson("/api/jobs", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ vehicle, mode, phone: phoneDigits(), portalIds, customerConsent: true })
-    });
-    const body = await response.json();
-    if (!response.ok) throw new Error(body.error || "Sorgu başlatılamadı");
+    }, 15000);
     activeJobId = body.id;
     renderProgress(body);
     elements.progress.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -223,9 +244,7 @@ async function startJob() {
 
 async function boot() {
   try {
-    const [healthResponse, portalResponse] = await Promise.all([fetch("/health"), fetch("/api/portals")]);
-    const health = await healthResponse.json();
-    const portalData = await portalResponse.json();
+    const [health, portalData] = await Promise.all([fetchJson("/health"), fetchJson("/api/portals")]);
     if (!health.ok) throw new Error("Çevrimiçi sorgu ajanı başlatılamadı");
     if (health.defaultPhone) elements.phone.value = formatPhone(health.defaultPhone);
     portals = portalData.portals;
