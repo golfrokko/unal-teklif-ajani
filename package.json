@@ -1,11 +1,13 @@
 {
   "name": "unal-sigorta-teklif-ajani",
-  "version": "0.4.0",
+  "version": "1.0.0",
   "private": true,
   "type": "module",
   "description": "Ünal Sigorta çoklu trafik teklifi çevrimiçi sorgu ajanı",
   "scripts": {
-    "start": "node src/server.mjs"
+    "start": "node src/server.mjs",
+    "test": "node --test",
+    "check": "node --check src/server.mjs && node --check src/engine.mjs && node --check src/adapters/form-adapter.mjs"
   },
   "dependencies": {
     "express": "5.2.1",
