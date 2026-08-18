@@ -15,7 +15,7 @@ Ortam değişkenleri:
 ```env
 PANEL_USER=unal
 PANEL_PASSWORD=guclu-ve-benzersiz-bir-sifre
-DEFAULT_PHONE=05454012962
+DEFAULT_PHONE=05XXXXXXXXX
 MAX_CONCURRENCY=3
 HEADLESS=true
 ```
