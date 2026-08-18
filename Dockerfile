@@ -15,7 +15,8 @@ RUN npm ci --omit=dev \
 COPY public ./public
 COPY src ./src
 
-RUN mkdir -p /app/data/jobs /app/data/chrome-profile
+RUN mkdir -p /app/data/jobs /app/data/sessions \
+    && chmod 700 /app/data /app/data/jobs /app/data/sessions
 
 EXPOSE 4318
 
