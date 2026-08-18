@@ -1,0 +1,251 @@
+const sampleData = `T.C. / VKN: 12345678901
+Doğum Tarihi: 12.04.1988
+Plaka: 78 SR 283
+Ruhsat Seri No: AB123456
+Araç: HYUNDAI ACCENT ERA 1.4
+Model Yılı: 2008`;
+
+const statusNames = {
+  queued: "Sırada",
+  opening: "Portal açılıyor",
+  filling: "Bilgiler dolduruluyor",
+  submitted: "Sorgu gönderildi",
+  collecting: "Teklifler toplanıyor",
+  waiting_otp: "SMS kodu bekliyor",
+  completed: "Tamamlandı",
+  no_offer: "Teklif yok",
+  skipped_sms: "SMS nedeniyle atlandı",
+  mapping_required: "Adaptör eşlemesi gerekli",
+  manual_required: "Manuel işlem gerekli",
+  error: "Hata",
+};
+
+const elements = Object.fromEntries([
+  "raw-data", "identity", "birth-date", "plate", "registration", "vehicle", "year", "chassis", "engine",
+  "phone", "consent", "start-button", "parse-status", "portal-groups", "progress", "progress-list",
+  "progress-title", "progress-subtitle", "job-status", "results", "results-body", "result-count", "otp-dock",
+  "otp-cards", "otp-count", "error-banner", "portal-count", "max-concurrency", "concurrency-stat"
+].map((id) => [id, document.getElementById(id)]));
+
+let portals = [];
+let activeJobId = null;
+let pollTimer = null;
+
+function parseVehicleData(raw) {
+  return {
+    identity: raw.match(/(?:t\.?c\.?|tc|vkn|vergi)[^0-9]*(\d{10,11})/i)?.[1] || "",
+    birthDate: raw.match(/(?:doğum(?:\s+tarihi)?|dogum(?:\s+tarihi)?)[^0-9]*(\d{1,2}[./-]\d{1,2}[./-]\d{4})/i)?.[1] || "",
+    plate: raw.match(/(?:plaka)[^A-ZÇĞİÖŞÜ0-9]*((?:0[1-9]|[1-7]\d|8[01])\s*[A-ZÇĞİÖŞÜ]{1,3}\s*\d{2,5})/i)?.[1]?.replace(/\s+/g, " ").toUpperCase() || "",
+    registration: raw.match(/(?:ruhsat(?:\s+seri(?:\s+no)?)?|belge(?:\s+seri(?:\s+no)?)?)[^A-ZÇĞİÖŞÜ0-9]*([A-ZÇĞİÖŞÜ]{1,3}\s*\d{5,8})/i)?.[1]?.replace(/\s+/g, "").toUpperCase() || "",
+    vehicle: raw.match(/(?:araç|arac|marka\s*model)[^:\n]*:\s*([^\n]+)/i)?.[1]?.trim() || "",
+    year: raw.match(/(?:model\s*yılı|model\s*yili|yıl|yil)[^0-9]*(19\d{2}|20\d{2})/i)?.[1] || "",
+    chassis: raw.match(/(?:şasi|sasi)(?:\s+no|\s+numarası)?[^A-Z0-9]*([A-Z0-9]{8,20})/i)?.[1]?.toUpperCase() || "",
+    engine: raw.match(/(?:motor)(?:\s+no|\s+numarası)?[^A-Z0-9]*([A-Z0-9]{5,20})/i)?.[1]?.toUpperCase() || "",
+  };
+}
+
+function setParsed(data) {
+  elements.identity.value = data.identity || "";
+  elements["birth-date"].value = data.birthDate || "";
+  elements.plate.value = data.plate || "";
+  elements.registration.value = data.registration || "";
+  elements.vehicle.value = data.vehicle || "";
+  elements.year.value = data.year || "";
+  elements.chassis.value = data.chassis || "";
+  elements.engine.value = data.engine || "";
+  const count = Object.values(data).filter(Boolean).length;
+  elements["parse-status"].textContent = `${count} alan algılandı`;
+}
+
+function getVehicle() {
+  return {
+    identity: elements.identity.value,
+    birthDate: elements["birth-date"].value,
+    plate: elements.plate.value,
+    registration: elements.registration.value,
+    vehicle: elements.vehicle.value,
+    year: elements.year.value,
+    chassis: elements.chassis.value,
+    engine: elements.engine.value,
+  };
+}
+
+function phoneDigits() {
+  return elements.phone.value.replace(/\D/g, "");
+}
+
+function formatPhone(value) {
+  let digits = String(value).replace(/\D/g, "");
+  if (digits.startsWith("90") && digits.length === 12) digits = digits.slice(2);
+  if (digits.length === 10) digits = `0${digits}`;
+  return digits.length === 11 ? `${digits.slice(0,4)} ${digits.slice(4,7)} ${digits.slice(7,9)} ${digits.slice(9,11)}` : value;
+}
+
+function showError(message) {
+  elements["error-banner"].textContent = message;
+  elements["error-banner"].classList.remove("hidden");
+  window.setTimeout(() => elements["error-banner"].classList.add("hidden"), 7000);
+}
+
+function selectedPortalIds() {
+  return [...document.querySelectorAll('.portal-check input:checked')].map((input) => input.value);
+}
+
+function renderPortals() {
+  const grouped = portals.reduce((map, portal) => {
+    if (!map.has(portal.group)) map.set(portal.group, []);
+    map.get(portal.group).push(portal);
+    return map;
+  }, new Map());
+  elements["portal-groups"].innerHTML = [...grouped.entries()].map(([group, items]) => `
+    <article class="portal-group">
+      <h4>${group} • ${items.length}</h4>
+      <div class="portal-items">
+        ${items.map((portal) => `<label class="portal-check"><input type="checkbox" value="${portal.id}" checked /><span></span><div><strong>${portal.name}</strong><small>${portal.verifiedForm ? "Form bulundu" : "İlk sorguda eşleme testi"}</small></div></label>`).join("")}
+      </div>
+    </article>
+  `).join("");
+  elements["portal-count"].textContent = `${portals.length} portal`;
+}
+
+function renderProgress(job) {
+  const states = Object.values(job.portalStates || {});
+  const doneStatuses = ["completed", "no_offer", "skipped_sms", "mapping_required", "manual_required", "error"];
+  const done = states.filter((state) => doneStatuses.includes(state.status)).length;
+  elements.progress.classList.remove("hidden");
+  elements["progress-title"].textContent = `${done} / ${states.length} portal tamamlandı`;
+  elements["progress-subtitle"].textContent = job.mode === "no_sms" ? "SMS isteyen portallar otomatik atlanıyor." : "SMS isteyen portallar kod baloncuğunda bekliyor.";
+  elements["job-status"].textContent = job.status === "completed" ? "Sorgu tamamlandı" : "Sorgulanıyor";
+  elements["progress-list"].innerHTML = states.map((state) => `
+    <article class="progress-row" data-status="${state.status}">
+      <i></i><div><strong>${state.portalName}</strong><small>${state.message || statusNames[state.status] || state.status}</small></div><b>${statusNames[state.status] || state.status}</b>
+    </article>
+  `).join("");
+}
+
+function renderOtp(job) {
+  const waiting = Object.values(job.portalStates || {}).filter((state) => state.status === "waiting_otp");
+  elements["otp-dock"].classList.toggle("hidden", waiting.length === 0);
+  elements["otp-count"].textContent = `${waiting.length} portal kod bekliyor`;
+  elements["otp-cards"].innerHTML = waiting.map((state) => `
+    <article class="otp-card">
+      <h4>${state.portalName}</h4>
+      <p>${state.message || `${job.phone} numarasına gelen kodu yazın`}</p>
+      <form class="otp-entry" data-portal-id="${state.portalId}"><input inputmode="numeric" autocomplete="one-time-code" maxlength="8" placeholder="SMS kodu" required /><button type="submit">Kodu gönder</button></form>
+    </article>
+  `).join("");
+  document.querySelectorAll(".otp-entry").forEach((form) => form.addEventListener("submit", submitOtp));
+}
+
+function formatTry(value) {
+  return new Intl.NumberFormat("tr-TR", { style: "currency", currency: "TRY", minimumFractionDigits: 2 }).format(value);
+}
+
+function renderResults(job) {
+  const rows = job.summary || [];
+  if (!rows.length && job.status !== "completed") return;
+  elements.results.classList.remove("hidden");
+  elements["result-count"].textContent = `${rows.length} şirket`;
+  elements["results-body"].innerHTML = rows.length ? rows.map((row, index) => {
+    const best = row.sources.find((source) => source.price === row.bestPrice) || row.sources[0];
+    return `<tr><td>${index + 1}</td><td><strong>${row.company}</strong></td><td class="price">${formatTry(row.bestPrice)}</td><td>${best.sourcePortal}</td><td>${row.sources.length} portal</td></tr>`;
+  }).join("") : `<tr><td colspan="5">Henüz fiyat teklifi alınamadı. Portal durumlarını kontrol edin.</td></tr>`;
+}
+
+async function submitOtp(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const input = form.querySelector("input");
+  const button = form.querySelector("button");
+  button.disabled = true;
+  try {
+    const response = await fetch(`/api/jobs/${activeJobId}/otp/${form.dataset.portalId}`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ code: input.value })
+    });
+    const body = await response.json();
+    if (!response.ok) throw new Error(body.error || "Kod gönderilemedi");
+    button.textContent = "Gönderildi";
+  } catch (error) {
+    button.disabled = false;
+    showError(error.message);
+  }
+}
+
+async function pollJob() {
+  if (!activeJobId) return;
+  try {
+    const response = await fetch(`/api/jobs/${activeJobId}`);
+    const job = await response.json();
+    if (!response.ok) throw new Error(job.error || "Sorgu durumu alınamadı");
+    renderProgress(job);
+    renderOtp(job);
+    renderResults(job);
+    if (job.status === "completed" || job.status === "failed") {
+      window.clearInterval(pollTimer);
+      pollTimer = null;
+      elements["start-button"].disabled = false;
+      elements["start-button"].innerHTML = "Yeni sorgu başlat <span>→</span>";
+    }
+  } catch (error) {
+    showError(error.message);
+  }
+}
+
+async function startJob() {
+  const vehicle = getVehicle();
+  if (!/^\d{10,11}$/.test(vehicle.identity.replace(/\D/g, "")) || !vehicle.plate) return showError("TC/VKN ve plaka zorunludur.");
+  if (!elements.consent.checked) return showError("Müşteri sorgulama onayını işaretleyin.");
+  const portalIds = selectedPortalIds();
+  if (!portalIds.length) return showError("En az bir portal seçin.");
+  const mode = document.querySelector('input[name="mode"]:checked').value;
+  elements["start-button"].disabled = true;
+  elements["start-button"].textContent = "Sorgu başlatılıyor...";
+  try {
+    const response = await fetch("/api/jobs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ vehicle, mode, phone: phoneDigits(), portalIds, customerConsent: true })
+    });
+    const body = await response.json();
+    if (!response.ok) throw new Error(body.error || "Sorgu başlatılamadı");
+    activeJobId = body.id;
+    renderProgress(body);
+    elements.progress.scrollIntoView({ behavior: "smooth", block: "start" });
+    if (pollTimer) window.clearInterval(pollTimer);
+    pollTimer = window.setInterval(pollJob, 1200);
+    await pollJob();
+  } catch (error) {
+    elements["start-button"].disabled = false;
+    elements["start-button"].innerHTML = "Tüm seçili portallarda sorgula <span>→</span>";
+    showError(error.message);
+  }
+}
+
+async function boot() {
+  try {
+    const [healthResponse, portalResponse] = await Promise.all([fetch("/health"), fetch("/api/portals")]);
+    const health = await healthResponse.json();
+    const portalData = await portalResponse.json();
+    if (!health.ok) throw new Error("Çevrimiçi sorgu ajanı başlatılamadı");
+    if (health.defaultPhone) elements.phone.value = formatPhone(health.defaultPhone);
+    portals = portalData.portals;
+    elements["max-concurrency"].textContent = `En fazla ${portalData.maxConcurrency} eşzamanlı sorgu`;
+    elements["concurrency-stat"].textContent = portalData.maxConcurrency;
+    renderPortals();
+  } catch (error) {
+    showError(`Sorgu sunucusu bağlantı hatası: ${error.message}`);
+  }
+}
+
+elements["raw-data"].addEventListener("input", (event) => setParsed(parseVehicleData(event.target.value)));
+elements["sample-button"] = document.getElementById("sample-button");
+elements["sample-button"].addEventListener("click", () => { elements["raw-data"].value = sampleData; setParsed(parseVehicleData(sampleData)); });
+document.getElementById("clear-button").addEventListener("click", () => { elements["raw-data"].value = ""; setParsed({}); });
+elements.phone.addEventListener("blur", () => { elements.phone.value = formatPhone(elements.phone.value); });
+elements["start-button"].addEventListener("click", startJob);
+document.querySelectorAll('.mode input').forEach((input) => input.addEventListener("change", () => document.querySelectorAll(".mode").forEach((label) => label.classList.toggle("selected", label.contains(document.querySelector('input[name="mode"]:checked'))))));
+document.getElementById("select-all").addEventListener("click", () => document.querySelectorAll('.portal-check input').forEach((input) => { input.checked = true; }));
+document.getElementById("select-none").addEventListener("click", () => document.querySelectorAll('.portal-check input').forEach((input) => { input.checked = false; }));
+document.getElementById("select-ihsan").addEventListener("click", () => document.querySelectorAll('.portal-check input').forEach((input) => { input.checked = portals.find((portal) => portal.id === input.value)?.group === "İhsan altyapısı"; }));
+
+boot();
