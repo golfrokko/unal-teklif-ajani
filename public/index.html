@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="tr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Ünal Sigorta Teklif Avcısı</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <aside class="sidebar">
+    <div class="brand"><b>Ü</b><div><strong>ÜNAL SİGORTA</strong><span>TEKLİF AVCISI</span></div></div>
+    <nav>
+      <a class="active" href="#new-query">＋ Yeni sorgu</a>
+      <a href="#progress">↻ Sorgu durumu</a>
+      <a href="#portals">⌘ Portal havuzu</a>
+      <a href="#results">▤ Teklif sonuçları</a>
+    </nav>
+    <div class="agent-online"><i></i><div><strong>Çevrimiçi ajan bağlı</strong><span>Oturumlar güvenli sunucuda</span></div></div>
+  </aside>
+
+  <main>
+    <header>
+      <div><span>TRAFİK TEKLİF OPERASYONU</span><h1>Çoklu araç sorgusu</h1></div>
+      <div class="header-meta"><b id="portal-count">25 portal</b><span id="max-concurrency">Sorgu kapasitesi hazırlanıyor</span></div>
+    </header>
+
+    <section class="hero">
+      <div><span class="eyebrow">TEK VERİ • TÜM KAYNAKLAR</span><h2>Eksik şirket kalmasın.<br />Bütün teklifleri tek listede topla.</h2><p>Her portal kendi oturumuyla açılır. SMS gereken yerde kodu sen girersin; açık oturum sonraki sorgularda kullanılır.</p></div>
+      <div class="hero-stat"><b id="concurrency-stat">3</b><span>portal aynı anda<br />sorgulanabilir</span></div>
+    </section>
+
+    <div id="error-banner" class="error-banner hidden"></div>
+
+    <section class="query-grid" id="new-query">
+      <article class="card input-card">
+        <div class="card-title"><b>1</b><div><h3>Araç bilgilerini yapıştır</h3><p>Metin otomatik ayrıştırılır; istersen alanları elle düzeltebilirsin.</p></div><button id="sample-button" type="button">Örnek doldur</button></div>
+        <label class="field-label" for="raw-data">ARAÇ VE SİGORTALI BİLGİSİ <span>Ctrl + V</span></label>
+        <textarea id="raw-data" spellcheck="false" placeholder="TC/VKN, doğum tarihi, plaka ve ruhsat bilgisini buraya yapıştırın"></textarea>
+        <div class="parse-head"><span id="parse-status">0 alan algılandı</span><button id="clear-button" type="button">Temizle</button></div>
+        <div class="parsed-grid">
+          <label>TC / VKN<input id="identity" inputmode="numeric" maxlength="11" /></label>
+          <label>Doğum tarihi<input id="birth-date" placeholder="GG.AA.YYYY" /></label>
+          <label>Plaka<input id="plate" /></label>
+          <label>Ruhsat seri no<input id="registration" /></label>
+          <label>Araç / model<input id="vehicle" /></label>
+          <label>Model yılı<input id="year" inputmode="numeric" maxlength="4" /></label>
+          <label>Şasi no <small>İsteğe bağlı</small><input id="chassis" /></label>
+          <label>Motor no <small>İsteğe bağlı</small><input id="engine" /></label>
+        </div>
+      </article>
+
+      <aside class="card settings-card">
+        <div class="card-title"><b>2</b><div><h3>Sorgu şekli</h3><p>Her araç için yeniden seçebilirsin.</p></div></div>
+        <label class="mode selected" data-mode="ask_sms">
+          <input type="radio" name="mode" value="ask_sms" checked />
+          <span></span><div><strong>SMS gerektiğinde bana sor</strong><small>Önerilen • En geniş teklif havuzu</small><p>Her site için ayrı kod baloncuğu açılır.</p></div>
+        </label>
+        <label class="mode" data-mode="no_sms">
+          <input type="radio" name="mode" value="no_sms" />
+          <span></span><div><strong>Yalnız SMS’siz devam et</strong><small>Daha hızlı • Daha az kaynak</small><p>SMS isteyen portal otomatik atlanır.</p></div>
+        </label>
+
+        <label class="phone-field">SMS GÖNDERİLECEK NUMARA
+          <input id="phone" value="" placeholder="05XX XXX XX XX" inputmode="tel" />
+          <small>Bu sorguya özel değiştirebilirsin.</small>
+        </label>
+
+        <label class="consent"><input id="consent" type="checkbox" /><span></span><p>Müşterinin teklif sorgulama ve kişisel veri işleme onayı alınmıştır.</p></label>
+        <button id="start-button" class="primary" type="button">Tüm seçili portallarda sorgula <span>→</span></button>
+        <p class="safety">CAPTCHA otomatik çözülmez. Güvenlik kontrolü çıkan portal manuel olarak işaretlenir.</p>
+      </aside>
+    </section>
+
+    <section class="card portal-section" id="portals">
+      <div class="section-head"><div><span class="eyebrow orange">PORTAL HAVUZU</span><h3>25 farklı teklif kaynağı</h3><p>İhsan altyapılı portallar ortak adaptörle; diğerleri siteye özel eşleme ile sorgulanır.</p></div><div class="portal-actions"><button id="select-all" type="button">Tümünü seç</button><button id="select-ihsan" type="button">Yalnız İhsan</button><button id="select-none" type="button">Temizle</button></div></div>
+      <div id="portal-groups" class="portal-groups"></div>
+    </section>
+
+    <section class="card progress-section hidden" id="progress">
+      <div class="section-head"><div><span class="eyebrow orange">CANLI SORGULAMA</span><h3 id="progress-title">Portallar sıraya alındı</h3><p id="progress-subtitle">Beşerli gruplar hâlinde ilerliyor.</p></div><span id="job-status" class="status-pill">Hazırlanıyor</span></div>
+      <div id="progress-list" class="progress-list"></div>
+    </section>
+
+    <section class="card results-section hidden" id="results">
+      <div class="section-head"><div><span class="eyebrow orange">TEK LİSTE</span><h3>Tüm şirket teklifleri</h3><p>Aynı şirket birden fazla portaldan geldiyse en ucuz fiyat üstte gösterilir.</p></div><b id="result-count" class="result-count">0 şirket</b></div>
+      <div class="table-wrap"><table><thead><tr><th>#</th><th>Sigorta şirketi</th><th>En düşük prim</th><th>En iyi kaynak</th><th>Kaynak sayısı</th></tr></thead><tbody id="results-body"></tbody></table></div>
+    </section>
+  </main>
+
+  <div id="otp-dock" class="otp-dock hidden"><div class="otp-dock-head"><div><span>SMS DOĞRULAMALARI</span><strong id="otp-count">0 portal kod bekliyor</strong></div><b>Telefonu kontrol et</b></div><div id="otp-cards"></div></div>
+
+  <script type="module" src="/app.js"></script>
+</body>
+</html>
