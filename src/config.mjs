@@ -15,6 +15,7 @@ export const config = Object.freeze({
   panelUser: String(process.env.PANEL_USER || "").trim(),
   panelPassword: String(process.env.PANEL_PASSWORD || ""),
   defaultPhone: String(process.env.DEFAULT_PHONE || ""),
+  defaultEmail: String(process.env.DEFAULT_EMAIL || "").trim(),
   maxConcurrency: boundedNumber(process.env.MAX_CONCURRENCY, 3, 1, 5),
   maxActiveJobs: boundedNumber(process.env.MAX_ACTIVE_JOBS, 1, 1, 2),
   navigationTimeoutMs: boundedNumber(process.env.NAVIGATION_TIMEOUT_MS, 45000, 10000, 120000),

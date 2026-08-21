@@ -15,6 +15,20 @@ test("25 portalın SMS politikası tanımlıdır", () => {
 test("doğrulanmış SMS politikaları korunur", () => {
   assert.equal(portals.find((portal) => portal.id === "lion").smsPolicy, "session_once");
   assert.equal(portals.find((portal) => portal.id === "enuygun").smsPolicy, "per_query");
+  assert.equal(portals.find((portal) => portal.id === "hepiyi").smsPolicy, "per_query");
+});
+
+test("yönlendirme ve bozuk istemci portalları çalışıyor gibi sunulmaz", () => {
+  assert.equal(portals.find((portal) => portal.id === "hangikredi").diagnosticState, "redirect_only");
+  assert.equal(portals.find((portal) => portal.id === "enpara").diagnosticState, "auth_required");
+  assert.equal(portals.find((portal) => portal.id === "sigortala").diagnosticState, "client_error");
+  assert.equal(portals.find((portal) => portal.id === "policekes").diagnosticState, "client_error");
+  assert.equal(portals.find((portal) => portal.id === "quick").url, "https://www.quicksigorta.com/uretim/trafik");
+});
+
+test("SigortaBaz yavaş açılışlar için daha uzun gezinme süresi kullanır", () => {
+  const portal = portals.find((item) => item.id === "sigortabaz");
+  assert.ok(portal.navigationTimeoutMs >= 60000);
 });
 
 test("dokuz İhsan portalı canlı beta havuzunda açıktır", () => {
