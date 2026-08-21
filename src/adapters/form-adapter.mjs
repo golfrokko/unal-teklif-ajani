@@ -4,7 +4,7 @@ function escapeRegex(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-async function fillFirst(target, value, selectors, labelTerms) {
+export async function fillFirst(target, value, selectors, labelTerms) {
   if (!value) return false;
   for (const selector of selectors) {
     try {
@@ -43,7 +43,7 @@ async function fillFirst(target, value, selectors, labelTerms) {
   return false;
 }
 
-async function acceptRequiredConsents(target) {
+export async function acceptRequiredConsents(target) {
   const labels = target.locator("label");
   const count = Math.min(await labels.count(), 140);
   for (let index = 0; index < count; index += 1) {
@@ -55,7 +55,7 @@ async function acceptRequiredConsents(target) {
   }
 }
 
-async function resolveTarget(page, portal) {
+export async function resolveTarget(page, portal) {
   if (portal.adapter !== "ihsan-frame") return page;
   await page.waitForTimeout(1200);
   return page.frames().find((frame) => frame !== page.mainFrame() && /sigorta\.online/i.test(frame.url())) || page;
@@ -87,7 +87,7 @@ async function fillQuoteForm(target, job) {
   return filled;
 }
 
-async function clickSubmit(target) {
+export async function clickSubmit(target) {
   for (const name of [/Gönder/i, /Teklif(?:i)? Al/i, /Sorgula/i, /Devam/i, /Hemen Teklif/i]) {
     try {
       const button = target.getByRole("button", { name }).first();
@@ -109,16 +109,16 @@ async function clickSubmit(target) {
   return false;
 }
 
-async function visibleText(target) {
+export async function visibleText(target) {
   return (await target.locator("body").innerText({ timeout: 3000 }).catch(() => "")).slice(0, 300000);
 }
 
-async function detectCaptcha(page, text) {
+export async function detectCaptcha(page, text) {
   if (/(VERIFY YOU ARE HUMAN|İNSAN OLDUĞUNUZU DOĞRULAYIN|ROBOT OLMADIĞINIZI|GÜVENLİK KONTROLÜ|CHECKING YOUR BROWSER)/i.test(text)) return true;
   return (await page.locator('iframe[src*="recaptcha" i], iframe[src*="hcaptcha" i], [class*="captcha" i], [id*="captcha" i]').count()) > 0;
 }
 
-async function findOtpInput(target) {
+export async function findOtpInput(target) {
   for (const selector of [
     'input[autocomplete="one-time-code"]', 'input[name*="otp" i]', 'input[name*="sms" i]', 'input[id*="otp" i]',
     'input[id*="sms" i]', 'input[placeholder*="doğrulama" i]', 'input[placeholder*="kod" i]',
@@ -129,14 +129,14 @@ async function findOtpInput(target) {
   return null;
 }
 
-function pageState(text) {
+export function pageState(text) {
   if (/(ÇOK FAZLA İSTEK|TOO MANY REQUESTS|RATE LIMIT|429)/i.test(text)) return "rate_limited";
   if (/(GİRİŞ YAP|OTURUM AÇ|KULLANICI ADI|ACENTE GİRİŞİ)/i.test(text) && /(ŞİFRE|PASSWORD)/i.test(text)) return "auth_required";
   if (/(TEKLİF BULUNAMADI|UYGUN TEKLİF YOK|FİYAT ALINAMADI|SONUÇ BULUNAMADI)/i.test(text)) return "no_offer";
   return null;
 }
 
-async function waitForOutcome({ page, target, job, portal, resultTimeoutMs, requestOtp, setState, isCancelled }) {
+export async function waitForOutcome({ page, target, job, portal, resultTimeoutMs, requestOtp, setState, isCancelled }) {
   const startedAt = Date.now();
   let lastOffers = [];
   let lastOfferChangeAt = 0;

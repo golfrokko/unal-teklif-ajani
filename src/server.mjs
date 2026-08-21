@@ -9,7 +9,7 @@ import { FileStore, publicJob } from "./lib/store.mjs";
 import { normalizeOtp, normalizePhone, safeMessage, validateJobInput } from "./lib/validation.mjs";
 import { QueryEngine } from "./engine.mjs";
 
-const VERSION = "1.0.0";
+const VERSION = "1.1.0";
 const portalRegistry = new Map(portals.map((portal) => [portal.id, Object.freeze({ ...portal })]));
 const store = new FileStore({ jobsDir: paths.jobsDir, settingsFile: paths.settingsFile, retentionDays: config.retentionDays });
 const events = new JobEvents();
@@ -17,13 +17,14 @@ const browserManager = new BrowserManager({ sessionsDir: paths.sessionsDir, head
 await Promise.all([store.init(), browserManager.init()]);
 let portalSettings = await store.getPortalSettings();
 let lastRuntimeError = null;
+let portalProbes = {};
 
 function portalView(portal) {
   const setting = portalSettings[portal.id] || {};
   return {
     ...portal,
-    enabled: setting.enabled !== false,
-    integrationStatus: setting.integrationStatus || (portal.verifiedForm ? "configured_unverified" : "discovery"),
+    enabled: typeof setting.enabled === "boolean" ? setting.enabled : portal.defaultEnabled === true,
+    integrationStatus: setting.integrationStatus || portal.integrationStatus || (portal.verifiedForm ? "configured_unverified" : "discovery"),
     lastVerifiedAt: setting.lastVerifiedAt || null,
     note: setting.note || "",
   };
@@ -97,6 +98,7 @@ app.get("/health", (req, res) => res.json({
   maxConcurrency: config.maxConcurrency,
   queue: queue.stats,
   browser: { state: browserManager.state, activeContexts: browserManager.activeContextCount },
+  portalProbes,
   lastRuntimeError: lastRuntimeError || engine.lastError || browserManager.lastError,
   panelAuthConfigured: Boolean(config.panelUser && config.panelPassword),
 }));
@@ -142,6 +144,12 @@ async function createJob(req, res, next) {
     const requested = Array.isArray(req.body?.portalIds) ? new Set(req.body.portalIds) : new Set(portals.map((portal) => portal.id));
     const selected = portals.filter((portal) => requested.has(portal.id) && portalView(portal).enabled);
     if (!selected.length) return res.status(400).json({ error: "Etkin en az bir portal seçilmelidir" });
+    if (selected.some((portal) => ["ihsan", "ihsan-frame"].includes(portal.adapter))) {
+      if (!validated.value.vehicle.registration) return res.status(400).json({ error: "İhsan altyapılı sorgular için ruhsat seri numarası zorunludur" });
+      if (validated.value.vehicle.identity.length === 11 && !/^\d{1,2}[./-]\d{1,2}[./-]\d{4}$/.test(validated.value.vehicle.birthDate)) {
+        return res.status(400).json({ error: "İhsan altyapılı sorgular için doğum tarihi GG.AA.YYYY biçiminde zorunludur" });
+      }
+    }
     const now = new Date().toISOString();
     const job = {
       id: randomUUID(), createdAt: now, updatedAt: now, startedAt: null, finishedAt: null, status: "queued",
@@ -211,6 +219,25 @@ const server = app.listen(config.port, "0.0.0.0", () => {
   console.log(`Ünal Sigorta Teklif Ajanı v${VERSION}: http://0.0.0.0:${config.port}`);
   console.log(`${portals.length} portal | ${config.maxConcurrency} portal/iş | ${config.maxActiveJobs} aktif iş`);
 });
+
+async function probeConfiguredPortals() {
+  const targets = portals.filter((portal) => portal.defaultEnabled && ["ihsan", "ihsan-frame"].includes(portal.adapter));
+  for (const portal of targets) {
+    portalProbes = { ...portalProbes, [portal.id]: { state: "running", checkedAt: new Date().toISOString() } };
+    try {
+      const result = await engine.probePortal(portal);
+      portalProbes = { ...portalProbes, [portal.id]: { ...result, checkedAt: new Date().toISOString() } };
+      console.log(`[probe:${portal.id}] ${result.state}`);
+    } catch (error) {
+      const message = safeMessage(error, 240);
+      portalProbes = { ...portalProbes, [portal.id]: { state: "error", message, checkedAt: new Date().toISOString() } };
+      console.warn(`[probe:${portal.id}] ${message}`);
+    }
+  }
+}
+setTimeout(() => probeConfiguredPortals().catch((error) => {
+  lastRuntimeError = `Portal teşhisi: ${safeMessage(error, 240)}`;
+}), 1500).unref();
 process.on("unhandledRejection", (error) => {
   lastRuntimeError = `Beklenmeyen hata: ${safeMessage(error, 300)}`;
   console.error(lastRuntimeError);

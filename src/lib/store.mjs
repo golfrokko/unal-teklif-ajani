@@ -113,7 +113,7 @@ export class FileStore {
 
 export function isPortalTerminal(status) {
   return [
-    "completed", "no_offer", "skipped_sms", "mapping_required", "auth_required", "manual_required",
+    "completed", "no_offer", "skipped_sms", "mapping_required", "input_required", "access_blocked", "auth_required", "manual_required",
     "rate_limited", "timeout", "error", "cancelled", "interrupted",
   ].includes(status);
 }
