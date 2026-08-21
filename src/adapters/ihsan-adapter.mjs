@@ -210,6 +210,7 @@ async function namedControlVisible(target, names) {
     for (const role of ["button", "link"]) {
       if (await target.getByRole(role, { name }).first().isVisible({ timeout: 300 }).catch(() => false)) return true;
     }
+    if (await target.getByText(name, { exact: true }).first().isVisible({ timeout: 300 }).catch(() => false)) return true;
   }
   return false;
 }
