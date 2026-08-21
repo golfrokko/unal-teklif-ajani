@@ -88,7 +88,7 @@ async function fillQuoteForm(target, job) {
 }
 
 export async function clickSubmit(target) {
-  for (const name of [/Gönder/i, /Teklif(?:i)? Al/i, /Sorgula/i, /Devam/i, /Hemen Teklif/i]) {
+  for (const name of [/Gönder/i, /Teklif(?:i)? Al/i, /Sorgula/i, /Devam/i, /Hemen Teklif/i, /Doğrula/i, /Onayla/i]) {
     try {
       const button = target.getByRole("button", { name }).first();
       if (await button.isVisible({ timeout: 500 }) && await button.isEnabled({ timeout: 500 })) {
@@ -105,6 +105,21 @@ export async function clickSubmit(target) {
         return true;
       }
     } catch {}
+  }
+  return false;
+}
+
+export async function clickNamedButton(target, names) {
+  for (const name of names) {
+    for (const role of ["button", "link"]) {
+      try {
+        const control = target.getByRole(role, { name }).first();
+        if (await control.isVisible({ timeout: 500 }) && await control.isEnabled({ timeout: 500 })) {
+          await control.click({ timeout: 5000 });
+          return true;
+        }
+      } catch {}
+    }
   }
   return false;
 }
