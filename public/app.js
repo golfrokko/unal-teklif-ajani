@@ -38,6 +38,14 @@ const elements = Object.fromEntries([
 let portals = [];
 let activeJobId = null;
 let pollTimer = null;
+let announcedOtpPortals = new Set();
+const otpSubmissionState = new Map();
+
+function escapeHtml(value) {
+  return String(value ?? "").replace(/[&<>"']/g, (character) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;",
+  })[character]);
+}
 
 async function fetchJson(url, options = {}, timeoutMs = 15000) {
   const controller = new AbortController();
@@ -145,29 +153,70 @@ function renderProgress(job) {
   const states = Object.values(job.portalStates || {});
   const doneStatuses = ["completed", "no_offer", "skipped_sms", "mapping_required", "input_required", "access_blocked", "auth_required", "manual_required", "rate_limited", "timeout", "error", "cancelled", "interrupted"];
   const done = states.filter((state) => doneStatuses.includes(state.status)).length;
+  const otpDrafts = new Map([...document.querySelectorAll("#progress-list .otp-entry")].map((form) => [form.dataset.portalId, form.querySelector("input")?.value || ""]));
+  const focusedOtpForm = document.activeElement?.closest?.(".otp-entry");
+  const focusedPortalId = focusedOtpForm?.dataset.portalId || null;
+  const focusedSelection = focusedOtpForm?.querySelector("input")?.selectionStart ?? null;
   elements.progress.classList.remove("hidden");
   elements["progress-title"].textContent = `${done} / ${states.length} portal tamamlandı`;
   elements["progress-subtitle"].textContent = job.mode === "no_sms" ? "SMS isteyen portallar otomatik atlanıyor." : "SMS isteyen portallar kod baloncuğunda bekliyor.";
   elements["job-status"].textContent = ({ completed: "Sorgu tamamlandı", partial: "Kısmi tamamlandı", failed: "Sorgu başarısız", cancelled: "İptal edildi", interrupted: "Kesintiye uğradı" })[job.status] || "Sorgulanıyor";
-  elements["progress-list"].innerHTML = states.map((state) => `
-    <article class="progress-row" data-status="${state.status}">
-      <i></i><div><strong>${state.portalName}</strong><small>${state.message || statusNames[state.status] || state.status}</small></div><b>${statusNames[state.status] || state.status}</b>
-    </article>
-  `).join("");
+  elements["progress-list"].innerHTML = states.map((state) => {
+    const portalId = escapeHtml(state.portalId);
+    const portalName = escapeHtml(state.portalName);
+    const message = escapeHtml(state.message || statusNames[state.status] || state.status);
+    const otpState = otpSubmissionState.get(state.portalId);
+    const waitingForOtp = state.status === "waiting_otp";
+    return `
+      <article class="progress-item" data-status="${escapeHtml(state.status)}">
+        <div class="progress-row" data-status="${escapeHtml(state.status)}">
+          <i></i><div><strong>${portalName}</strong><small>${message}</small></div><b>${escapeHtml(statusNames[state.status] || state.status)}</b>
+        </div>
+        ${waitingForOtp ? `
+          <form class="otp-entry otp-inline" data-portal-id="${portalId}">
+            <div class="otp-inline-copy"><strong>${portalName} SMS doğrulaması</strong><small>Telefona gelen kodu aşağıya yazın. Kod yalnız bu firmaya gönderilir.</small></div>
+            <div class="otp-inline-fields"><input inputmode="numeric" autocomplete="one-time-code" maxlength="8" placeholder="SMS kodu" aria-label="${portalName} SMS kodu" required ${otpState ? "disabled" : ""} /><button type="submit" ${otpState ? "disabled" : ""}>${otpState === "sending" ? "Gönderiliyor…" : otpState === "sent" ? "Kod gönderildi" : "Kodu doğrula"}</button></div>
+          </form>` : ""}
+      </article>`;
+  }).join("");
+
+  document.querySelectorAll("#progress-list .otp-entry").forEach((form) => {
+    const input = form.querySelector("input");
+    if (input && otpDrafts.has(form.dataset.portalId)) input.value = otpDrafts.get(form.dataset.portalId);
+  });
+  if (focusedPortalId) {
+    const nextForm = [...document.querySelectorAll("#progress-list .otp-entry")].find((form) => form.dataset.portalId === focusedPortalId);
+    const nextInput = nextForm?.querySelector("input:not(:disabled)");
+    if (nextInput) {
+      nextInput.focus({ preventScroll: true });
+      if (focusedSelection !== null) nextInput.setSelectionRange(focusedSelection, focusedSelection);
+    }
+  }
 }
 
 function renderOtp(job) {
   const waiting = Object.values(job.portalStates || {}).filter((state) => state.status === "waiting_otp");
-  elements["otp-dock"].classList.toggle("hidden", waiting.length === 0);
+  elements["otp-dock"].classList.add("hidden");
   elements["otp-count"].textContent = `${waiting.length} portal kod bekliyor`;
-  elements["otp-cards"].innerHTML = waiting.map((state) => `
-    <article class="otp-card">
-      <h4>${state.portalName}</h4>
-      <p>${state.message || `${job.phone} numarasına gelen kodu yazın`}</p>
-      <form class="otp-entry" data-portal-id="${state.portalId}"><input inputmode="numeric" autocomplete="one-time-code" maxlength="8" placeholder="SMS kodu" required /><button type="submit">Kodu gönder</button></form>
-    </article>
-  `).join("");
+  elements["otp-cards"].innerHTML = "";
   document.querySelectorAll(".otp-entry").forEach((form) => form.addEventListener("submit", submitOtp));
+
+  const waitingIds = new Set(waiting.map((state) => state.portalId));
+  for (const portalId of [...announcedOtpPortals]) {
+    if (!waitingIds.has(portalId)) announcedOtpPortals.delete(portalId);
+  }
+  for (const portalId of [...otpSubmissionState.keys()]) {
+    if (!waitingIds.has(portalId)) otpSubmissionState.delete(portalId);
+  }
+  const freshOtp = waiting.find((state) => !announcedOtpPortals.has(state.portalId));
+  if (freshOtp) {
+    announcedOtpPortals.add(freshOtp.portalId);
+    window.requestAnimationFrame(() => {
+      const form = [...document.querySelectorAll("#progress-list .otp-entry")].find((item) => item.dataset.portalId === freshOtp.portalId);
+      form?.scrollIntoView({ behavior: "smooth", block: "center" });
+      form?.querySelector("input")?.focus({ preventScroll: true });
+    });
+  }
 }
 
 function formatTry(value) {
@@ -190,16 +239,27 @@ async function submitOtp(event) {
   const form = event.currentTarget;
   const input = form.querySelector("input");
   const button = form.querySelector("button");
+  const portalId = form.dataset.portalId;
+  const code = input.value.trim();
+  if (!/^\d{4,8}$/.test(code)) return showError("SMS kodu 4-8 rakam olmalıdır.");
+  otpSubmissionState.set(portalId, "sending");
   button.disabled = true;
+  input.disabled = true;
+  button.textContent = "Gönderiliyor…";
   try {
-    const response = await fetch(`/api/jobs/${activeJobId}/otp/${form.dataset.portalId}`, {
-      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ code: input.value })
+    const response = await fetch(`/api/jobs/${activeJobId}/otp/${portalId}`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ code })
     });
     const body = await response.json();
     if (!response.ok) throw new Error(body.error || "Kod gönderilemedi");
-    button.textContent = "Gönderildi";
+    otpSubmissionState.set(portalId, "sent");
+    button.textContent = "Kod gönderildi";
+    await pollJob();
   } catch (error) {
+    otpSubmissionState.delete(portalId);
     button.disabled = false;
+    input.disabled = false;
+    button.textContent = "Kodu doğrula";
     showError(error.message);
   }
 }
@@ -231,6 +291,8 @@ async function startJob() {
   const mode = document.querySelector('input[name="mode"]:checked').value;
   elements["start-button"].disabled = true;
   elements["start-button"].textContent = "Sorgu başlatılıyor...";
+  announcedOtpPortals = new Set();
+  otpSubmissionState.clear();
   try {
     const body = await fetchJson("/api/jobs", {
       method: "POST",
