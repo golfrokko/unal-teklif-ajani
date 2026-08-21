@@ -1,0 +1,89 @@
+.progress-item {
+  min-width: 0;
+}
+
+.progress-item[data-status="waiting_otp"] .progress-row {
+  border-color: #ffc9a9;
+  border-bottom-right-radius: 0;
+  border-bottom-left-radius: 0;
+  background: #fffaf7;
+}
+
+.otp-inline {
+  margin: 0;
+  padding: 12px;
+  display: block;
+  border: 1px solid #ffc9a9;
+  border-top: 0;
+  border-radius: 0 0 9px 9px;
+  background: linear-gradient(135deg, #fff7f1, #fff);
+}
+
+.otp-inline-copy strong,
+.otp-inline-copy small {
+  display: block;
+}
+
+.otp-inline-copy strong {
+  color: #a74717;
+  font-size: 9px;
+}
+
+.otp-inline-copy small {
+  margin-top: 4px;
+  color: #7f8998;
+  font-size: 7px;
+  line-height: 1.45;
+}
+
+.otp-inline-fields {
+  margin-top: 9px;
+  display: flex;
+  gap: 7px;
+}
+
+.otp-inline-fields input {
+  min-width: 0;
+  flex: 1;
+  padding: 10px;
+  border: 1px solid #e0b89f;
+  border-radius: 8px;
+  outline: 0;
+  background: #fff;
+  color: #202c3d;
+  font-size: 12px;
+  font-weight: 850;
+  letter-spacing: .18em;
+}
+
+.otp-inline-fields input:focus {
+  border-color: var(--orange);
+  box-shadow: 0 0 0 3px rgba(255, 118, 41, .14);
+}
+
+.otp-inline-fields button {
+  padding: 0 14px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--orange);
+  color: #fff;
+  font-size: 8px;
+  font-weight: 850;
+}
+
+.otp-inline-fields button:disabled,
+.otp-inline-fields input:disabled {
+  opacity: .65;
+  cursor: not-allowed;
+}
+
+@media (max-width: 720px) {
+  .otp-inline-fields {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .otp-inline-fields button {
+    min-height: 40px;
+  }
+}

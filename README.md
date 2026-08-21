@@ -1,4 +1,4 @@
-# Ünal Sigorta Teklif Ajanı v1.1.4
+# Ünal Sigorta Teklif Ajanı v1.1.5
 
 Easypanel üzerinde çalışan, yetkili sigorta portallarındaki trafik tekliflerini kalıcı bir kuyrukta toplayan çevrimiçi sorgu altyapısıdır. Formun gönderilmesi başarı sayılmaz; yalnızca şirket ve fiyat verisi okunabilen sonuçlar teklif listesine girer.
 
