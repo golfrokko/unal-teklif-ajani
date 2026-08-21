@@ -1,6 +1,6 @@
 {
   "name": "unal-sigorta-teklif-ajani",
-  "version": "1.3.2",
+  "version": "1.4.0",
   "private": true,
   "type": "module",
   "description": "Ünal Sigorta çoklu trafik teklifi çevrimiçi sorgu ajanı",
