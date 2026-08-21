@@ -40,6 +40,21 @@ let activeJobId = null;
 let pollTimer = null;
 let announcedOtpPortals = new Set();
 const otpSubmissionState = new Map();
+const ACTIVE_JOB_STATUSES = new Set(["queued", "running", "cancelling"]);
+const ACTIVE_JOB_STORAGE_KEY = "unal-teklif-active-job";
+let portalRefreshTimer = null;
+let portalSelectionTouched = false;
+
+function rememberActiveJob(jobId) {
+  activeJobId = jobId || null;
+  if (activeJobId) window.localStorage.setItem(ACTIVE_JOB_STORAGE_KEY, activeJobId);
+  else window.localStorage.removeItem(ACTIVE_JOB_STORAGE_KEY);
+}
+
+function startPolling() {
+  if (pollTimer) window.clearInterval(pollTimer);
+  pollTimer = window.setInterval(pollJob, 1200);
+}
 
 function escapeHtml(value) {
   return String(value ?? "").replace(/[&<>"']/g, (character) => ({
@@ -126,7 +141,8 @@ function selectedPortalIds() {
   return [...document.querySelectorAll('.portal-check input:checked')].map((input) => input.value);
 }
 
-function renderPortals() {
+function renderPortals({ preserveSelection = false } = {}) {
+  const previousSelection = preserveSelection && portalSelectionTouched ? new Set(selectedPortalIds()) : null;
   const smsLabels = {
     none: "SMS yok • doğrulandı",
     per_query: "Her sorguda SMS",
@@ -142,11 +158,28 @@ function renderPortals() {
     <article class="portal-group">
       <h4>${group} • ${items.length}</h4>
       <div class="portal-items">
-        ${items.map((portal) => `<label class="portal-check" title="${portal.smsEvidence || ""}"><input type="checkbox" value="${portal.id}" ${portal.enabled ? "checked" : "disabled"} /><span></span><div><strong>${portal.name}</strong><small>${portal.enabled ? ({ verified: "Canlı doğrulandı", beta: "Canlı test aşaması" }[portal.integrationStatus] || "Adaptör testi gerekli") : "Adaptör hazır değil"}<br />${smsLabels[portal.smsPolicy] || smsLabels.unknown}</small></div></label>`).join("")}
+        ${items.map((portal) => {
+          const probeLabels = {
+            running: "Canlı bağlantı test ediliyor",
+            form_detected: "Canlı form bulundu",
+            mapping_required: "Teklif formu eşleştirilemedi",
+            manual_required: "CAPTCHA / manuel doğrulama gerekli",
+            access_blocked: "Sunucu erişimi engellendi",
+            auth_required: "Portal oturumu gerekli",
+            error: "Bağlantı hatası",
+            timeout: "Bağlantı zaman aşımı",
+            unsupported: "Adaptör teşhisi eksik",
+          };
+          const readiness = probeLabels[portal.probeState]
+            || (portal.enabled ? ({ verified: "Canlı doğrulandı", beta: "Canlı test aşaması" }[portal.integrationStatus] || "Adaptör testi gerekli") : "Canlı test bekleniyor");
+          const checked = portal.enabled && (previousSelection ? previousSelection.has(portal.id) : true);
+          return `<label class="portal-check" title="${escapeHtml(portal.probeMessage || portal.smsEvidence || "")}"><input type="checkbox" value="${escapeHtml(portal.id)}" ${checked ? "checked" : ""} ${portal.enabled ? "" : "disabled"} /><span></span><div><strong>${escapeHtml(portal.name)}</strong><small>${escapeHtml(readiness)}<br />${escapeHtml(smsLabels[portal.smsPolicy] || smsLabels.unknown)}</small></div></label>`;
+        }).join("")}
       </div>
     </article>
   `).join("");
-  elements["portal-count"].textContent = `${portals.length} portal`;
+  const enabledCount = portals.filter((portal) => portal.enabled).length;
+  elements["portal-count"].textContent = `${enabledCount} hazır / ${portals.length} portal`;
 }
 
 function renderProgress(job) {
@@ -274,6 +307,7 @@ async function pollJob() {
     if (["completed", "partial", "failed", "cancelled", "interrupted"].includes(job.status)) {
       window.clearInterval(pollTimer);
       pollTimer = null;
+      rememberActiveJob(null);
       elements["start-button"].disabled = false;
       elements["start-button"].innerHTML = "Yeni sorgu başlat <span>→</span>";
     }
@@ -299,11 +333,10 @@ async function startJob() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ vehicle, mode, phone: phoneDigits(), portalIds, customerConsent: true })
     }, 15000);
-    activeJobId = body.id;
+    rememberActiveJob(body.id);
     renderProgress(body);
     elements.progress.scrollIntoView({ behavior: "smooth", block: "start" });
-    if (pollTimer) window.clearInterval(pollTimer);
-    pollTimer = window.setInterval(pollJob, 1200);
+    startPolling();
     await pollJob();
   } catch (error) {
     elements["start-button"].disabled = false;
@@ -314,13 +347,42 @@ async function startJob() {
 
 async function boot() {
   try {
-    const [health, portalData] = await Promise.all([fetchJson("/health"), fetchJson("/api/portals")]);
+    const [health, portalData, jobData] = await Promise.all([fetchJson("/health"), fetchJson("/api/portals"), fetchJson("/api/jobs")]);
     if (!health.ok) throw new Error("Çevrimiçi sorgu ajanı başlatılamadı");
     if (health.defaultPhone) elements.phone.value = formatPhone(health.defaultPhone);
     portals = portalData.portals;
     elements["max-concurrency"].textContent = `En fazla ${portalData.maxConcurrency} eşzamanlı sorgu`;
     elements["concurrency-stat"].textContent = portalData.maxConcurrency;
     renderPortals();
+
+    const rememberedJobId = window.localStorage.getItem(ACTIVE_JOB_STORAGE_KEY);
+    const jobs = Array.isArray(jobData.jobs) ? jobData.jobs : [];
+    const resumable = jobs.find((job) => job.id === rememberedJobId && ACTIVE_JOB_STATUSES.has(job.status))
+      || jobs.find((job) => ACTIVE_JOB_STATUSES.has(job.status) || Object.values(job.portalStates || {}).some((state) => state.status === "waiting_otp"));
+    if (resumable) {
+      rememberActiveJob(resumable.id);
+      elements["start-button"].disabled = true;
+      elements["start-button"].textContent = "Aktif sorgu devam ediyor...";
+      renderProgress(resumable);
+      renderOtp(resumable);
+      renderResults(resumable);
+      startPolling();
+      await pollJob();
+    } else {
+      rememberActiveJob(null);
+    }
+
+    let refreshCount = 0;
+    portalRefreshTimer = window.setInterval(async () => {
+      if (refreshCount >= 18) return window.clearInterval(portalRefreshTimer);
+      refreshCount += 1;
+      try {
+        const refreshed = await fetchJson("/api/portals", {}, 10000);
+        portals = refreshed.portals;
+        renderPortals({ preserveSelection: true });
+        if (portals.every((portal) => portal.probeState && portal.probeState !== "running")) window.clearInterval(portalRefreshTimer);
+      } catch {}
+    }, 5000);
   } catch (error) {
     showError(`Sorgu sunucusu bağlantı hatası: ${error.message}`);
   }
@@ -333,8 +395,20 @@ document.getElementById("clear-button").addEventListener("click", () => { elemen
 elements.phone.addEventListener("blur", () => { elements.phone.value = formatPhone(elements.phone.value); });
 elements["start-button"].addEventListener("click", startJob);
 document.querySelectorAll('.mode input').forEach((input) => input.addEventListener("change", () => document.querySelectorAll(".mode").forEach((label) => label.classList.toggle("selected", label.contains(document.querySelector('input[name="mode"]:checked'))))));
-document.getElementById("select-all").addEventListener("click", () => document.querySelectorAll('.portal-check input').forEach((input) => { input.checked = true; }));
-document.getElementById("select-none").addEventListener("click", () => document.querySelectorAll('.portal-check input').forEach((input) => { input.checked = false; }));
-document.getElementById("select-ihsan").addEventListener("click", () => document.querySelectorAll('.portal-check input').forEach((input) => { input.checked = portals.find((portal) => portal.id === input.value)?.group === "İhsan altyapısı"; }));
+elements["portal-groups"].addEventListener("change", (event) => {
+  if (event.target.matches('.portal-check input')) portalSelectionTouched = true;
+});
+document.getElementById("select-all").addEventListener("click", () => {
+  portalSelectionTouched = true;
+  document.querySelectorAll('.portal-check input:not(:disabled)').forEach((input) => { input.checked = true; });
+});
+document.getElementById("select-none").addEventListener("click", () => {
+  portalSelectionTouched = true;
+  document.querySelectorAll('.portal-check input').forEach((input) => { input.checked = false; });
+});
+document.getElementById("select-ihsan").addEventListener("click", () => {
+  portalSelectionTouched = true;
+  document.querySelectorAll('.portal-check input').forEach((input) => { input.checked = !input.disabled && portals.find((portal) => portal.id === input.value)?.group === "İhsan altyapısı"; });
+});
 
 boot();
