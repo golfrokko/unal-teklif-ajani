@@ -11,7 +11,7 @@ function portal(definition) {
 
 export const portals = [
   portal({ id: "lion", name: "Sigorta Lion", url: "https://lion.sigorta.online/trafik", adapter: "ihsan", group: "İhsan altyapısı", verifiedForm: true, defaultEnabled: true, integrationStatus: "beta", smsPolicy: "session_once", smsEvidence: "Kullanıcı gözlemi: oturum açılırken bir kez SMS istiyor; açık oturum sonraki sorgularda kullanılabiliyor" }),
-  portal({ id: "bitikla", name: "Bi Tıkla Sigorta", url: "https://bitikla.sigorta.online/trafik", adapter: "ihsan", group: "İhsan altyapısı", verifiedForm: true, defaultEnabled: true, integrationStatus: "beta" }),
+  portal({ id: "bitikla", name: "Bi Tıkla Sigorta", url: "https://bitikla.sigorta.online/trafik", adapter: "ihsan", group: "İhsan altyapısı", verifiedForm: true, defaultEnabled: true, integrationStatus: "beta", smsPolicy: "session_once", smsEvidence: "Kullanıcı gözlemi: oturum açılırken bir kez SMS istiyor; açık oturum sonraki sorgularda kullanılabiliyor" }),
   portal({ id: "sigortabaz", name: "SigortaBaz", url: "https://teklif.sigortabaz.com/trafik", adapter: "ihsan", group: "İhsan altyapısı", verifiedForm: true, defaultEnabled: true, integrationStatus: "beta", navigationTimeoutMs: 60000 }),
   portal({ id: "sigortamobil", name: "SigortaMobil", url: "https://sigortamobil.sigorta.online/trafik", adapter: "ihsan", group: "İhsan altyapısı", verifiedForm: true, defaultEnabled: true, integrationStatus: "beta" }),
   portal({ id: "tasalti", name: "Taşaltı Teklif", url: "https://tasalti.sigorta.online/trafik", adapter: "ihsan", group: "İhsan altyapısı", verifiedForm: true, defaultEnabled: true, integrationStatus: "beta" }),
