@@ -4,7 +4,7 @@ import { isPortalTerminal, publicJob } from "./lib/store.mjs";
 import { safeMessage } from "./lib/validation.mjs";
 
 const SUCCESS_PORTAL_STATES = new Set(["completed", "no_offer", "skipped_sms"]);
-const FAILURE_PORTAL_STATES = new Set(["mapping_required", "auth_required", "manual_required", "rate_limited", "timeout", "error", "interrupted"]);
+const FAILURE_PORTAL_STATES = new Set(["mapping_required", "input_required", "access_blocked", "auth_required", "manual_required", "rate_limited", "timeout", "error", "interrupted"]);
 
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -76,6 +76,16 @@ export class QueryEngine {
     await this.#saveAndPublish(job, "job.failed");
   }
 
+  async probePortal(portal) {
+    const adapter = getAdapter(portal);
+    if (typeof adapter.probe !== "function") return { state: "unsupported", message: "Bu adaptörde form teşhisi yok" };
+    return this.browserManager.withPortalPage(portal, (page) => adapter.probe({
+      page,
+      portal,
+      navigationTimeoutMs: portal.navigationTimeoutMs || this.config.navigationTimeoutMs,
+    }));
+  }
+
   submitOtp(jobId, portalId, code) {
     const key = `${jobId}:${portalId}`;
     const waiter = this.#otpWaiters.get(key);
@@ -128,6 +138,7 @@ export class QueryEngine {
         await this.#setPortalState(job, portal, outcome.status, outcome.message, {
           offerCount: outcome.offers?.length || 0,
           attempt: attempt + 1,
+          ...(outcome.diagnostics ? { diagnostics: outcome.diagnostics } : {}),
         });
         return;
       } catch (error) {
