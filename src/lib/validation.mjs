@@ -23,13 +23,14 @@ export function validateJobInput(body, defaultPhone) {
   const vehicle = normalizeVehicle(body?.vehicle);
   if (!/^\d{10,11}$/.test(vehicle.identity)) return { error: "Geçerli TC/VKN zorunludur" };
   if (!vehicle.plate) return { error: "Plaka zorunludur" };
+  const mode = body?.mode === "no_sms" ? "no_sms" : "ask_sms";
   const phone = normalizePhone(body?.phone) || normalizePhone(defaultPhone);
-  if (!phone) return { error: "Geçerli bir SMS telefon numarası girilmelidir" };
+  if (mode === "ask_sms" && !phone) return { error: "Geçerli bir SMS telefon numarası girilmelidir" };
   return {
     value: {
       vehicle,
       phone,
-      mode: body?.mode === "no_sms" ? "no_sms" : "ask_sms",
+      mode,
     },
   };
 }

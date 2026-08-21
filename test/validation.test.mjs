@@ -25,6 +25,18 @@ test("müşteri onayı olmadan iş oluşturmaz", () => {
   assert.equal(validated.value.phone, "05454012962");
 });
 
+test("SMS'siz mod telefon numarası olmadan çalışır", () => {
+  const validated = validateJobInput({
+    customerConsent: true,
+    mode: "no_sms",
+    phone: "",
+    vehicle: { identity: "12345678901", plate: "16JD625" },
+  }, "");
+  assert.equal(validated.error, undefined);
+  assert.equal(validated.value.phone, "");
+  assert.equal(validated.value.mode, "no_sms");
+});
+
 test("SMS kodunu yalnızca rakam olarak kabul eder", () => {
   assert.equal(normalizeOtp("12 34-56"), "123456");
   assert.equal(normalizeOtp("12"), "");
