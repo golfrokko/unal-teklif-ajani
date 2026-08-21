@@ -5,6 +5,11 @@ export function normalizePhone(value) {
   return /^05\d{9}$/.test(digits) ? digits : "";
 }
 
+export function normalizeEmail(value) {
+  const email = String(value || "").trim().toLowerCase().slice(0, 254);
+  return /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email) ? email : "";
+}
+
 export function normalizeVehicle(input = {}) {
   return {
     identity: String(input.identity || "").replace(/\D/g, "").slice(0, 11),
@@ -18,18 +23,20 @@ export function normalizeVehicle(input = {}) {
   };
 }
 
-export function validateJobInput(body, defaultPhone) {
+export function validateJobInput(body, defaultPhone, defaultEmail = "") {
   if (body?.customerConsent !== true) return { error: "Müşteri sorgulama onayı işaretlenmelidir" };
   const vehicle = normalizeVehicle(body?.vehicle);
   if (!/^\d{10,11}$/.test(vehicle.identity)) return { error: "Geçerli TC/VKN zorunludur" };
   if (!vehicle.plate) return { error: "Plaka zorunludur" };
   const mode = body?.mode === "no_sms" ? "no_sms" : "ask_sms";
   const phone = normalizePhone(body?.phone) || normalizePhone(defaultPhone);
+  const email = normalizeEmail(body?.email) || normalizeEmail(defaultEmail);
   if (mode === "ask_sms" && !phone) return { error: "Geçerli bir SMS telefon numarası girilmelidir" };
   return {
     value: {
       vehicle,
       phone,
+      email,
       mode,
     },
   };
