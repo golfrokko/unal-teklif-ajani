@@ -13,6 +13,7 @@ const statusNames = {
   collecting: "Teklifler toplanıyor",
   waiting_otp: "SMS kodu bekliyor",
   waiting_input: "Ek bilgi bekleniyor",
+  waiting_approval: "Onayınız bekleniyor",
   retrying: "Yeniden deneniyor",
   completed: "Tamamlandı",
   no_offer: "Teklif yok",
@@ -74,7 +75,7 @@ function escapeHtml(value) {
 const LOG_LEVELS = {
   success: ["completed", "no_offer"],
   error: ["error", "timeout", "mapping_required", "input_required", "access_blocked", "auth_required", "manual_required", "rate_limited", "failed"],
-  warn: ["skipped_sms", "cancelled", "interrupted", "retrying", "partial"],
+  warn: ["skipped_sms", "cancelled", "interrupted", "retrying", "partial", "waiting_approval"],
 };
 function logLevelForStatus(status) {
   if (LOG_LEVELS.success.includes(status)) return "success";
@@ -251,10 +252,11 @@ function renderProgress(job) {
   const states = Object.values(job.portalStates || {});
   const doneStatuses = ["completed", "no_offer", "skipped_sms", "mapping_required", "input_required", "access_blocked", "auth_required", "manual_required", "rate_limited", "timeout", "error", "cancelled", "interrupted"];
   const done = states.filter((state) => doneStatuses.includes(state.status)).length;
-  const otpDrafts = new Map([...document.querySelectorAll("#progress-list .otp-entry")].map((form) => [form.dataset.portalId, form.querySelector("input")?.value || ""]));
+  const otpDrafts = new Map([...document.querySelectorAll("#progress-list .otp-entry")].map((form) => [form.dataset.portalId, form.querySelector("input, select")?.value || ""]));
   const focusedOtpForm = document.activeElement?.closest?.(".otp-entry");
   const focusedPortalId = focusedOtpForm?.dataset.portalId || null;
-  const focusedSelection = focusedOtpForm?.querySelector("input")?.selectionStart ?? null;
+  const focusedInputEl = focusedOtpForm?.querySelector("input, select");
+  const focusedSelection = focusedInputEl?.tagName === "INPUT" ? focusedInputEl.selectionStart ?? null : null;
   elements.progress.classList.remove("hidden");
   elements["progress-title"].textContent = `${done} / ${states.length} portal tamamlandı`;
   elements["progress-subtitle"].textContent = job.mode === "no_sms" ? "SMS isteyen portallar otomatik atlanıyor." : "SMS isteyen portallar kod baloncuğunda bekliyor.";
@@ -270,9 +272,14 @@ function renderProgress(job) {
     const otpState = otpSubmissionState.get(state.portalId);
     const waitingForOtp = state.status === "waiting_otp";
     const waitingForInput = state.status === "waiting_input";
+    const waitingForApproval = state.status === "waiting_approval";
     const inputId = waitingForOtp ? "otp" : escapeHtml(state.inputId || "");
     const inputLabel = waitingForOtp ? "SMS doğrulaması" : escapeHtml(state.inputLabel || "Ek bilgi");
     const inputCopy = waitingForOtp ? "Telefona gelen kodu aşağıya yazın. Kod yalnız bu firmaya gönderilir." : "Portal bu bilgiyi istiyor; aşağıya yazıp gönderin.";
+    const choices = !waitingForOtp && Array.isArray(state.inputChoices) ? state.inputChoices : null;
+    const field = choices?.length
+      ? `<select aria-label="${portalName} ${inputLabel}" required ${otpState ? "disabled" : ""}><option value="">Seçiniz</option>${choices.map((choice) => `<option value="${escapeHtml(choice.value)}">${escapeHtml(choice.label)}</option>`).join("")}</select>`
+      : `<input inputmode="${waitingForOtp ? "numeric" : "text"}" autocomplete="${waitingForOtp ? "one-time-code" : "off"}" maxlength="${waitingForOtp ? 8 : 64}" placeholder="${waitingForOtp ? "SMS kodu" : inputLabel}" aria-label="${portalName} ${inputLabel}" required ${otpState ? "disabled" : ""} />`;
     return `
       <article class="progress-item" data-status="${escapeHtml(state.status)}">
         <div class="progress-row" data-status="${escapeHtml(state.status)}">
@@ -281,36 +288,49 @@ function renderProgress(job) {
         ${(waitingForOtp || waitingForInput) ? `
           <form class="otp-entry otp-inline" data-portal-id="${portalId}" data-input-id="${inputId}">
             <div class="otp-inline-copy"><strong>${portalName} ${inputLabel}</strong><small>${inputCopy}</small></div>
-            <div class="otp-inline-fields"><input inputmode="${waitingForOtp ? "numeric" : "text"}" autocomplete="${waitingForOtp ? "one-time-code" : "off"}" maxlength="${waitingForOtp ? 8 : 64}" placeholder="${waitingForOtp ? "SMS kodu" : inputLabel}" aria-label="${portalName} ${inputLabel}" required ${otpState ? "disabled" : ""} /><button type="submit" ${otpState ? "disabled" : ""}>${otpState === "sending" ? "Gönderiliyor…" : otpState === "sent" ? "Gönderildi" : (waitingForOtp ? "Kodu doğrula" : "Gönder")}</button></div>
+            <div class="otp-inline-fields">${field}<button type="submit" ${otpState ? "disabled" : ""}>${otpState === "sending" ? "Gönderiliyor…" : otpState === "sent" ? "Gönderildi" : (waitingForOtp ? "Kodu doğrula" : "Gönder")}</button></div>
+            ${waitingForOtp ? `<button type="button" class="otp-resend" data-portal-id="${portalId}" ${otpState ? "disabled" : ""}>SMS gelmedi mi? Kodu tekrar gönder</button>` : ""}
             ${otpErrorState.has(state.portalId) ? `<p class="otp-inline-error">${escapeHtml(otpErrorState.get(state.portalId))}</p>` : ""}
           </form>` : ""}
+        ${waitingForApproval ? `
+          <div class="approval-inline" data-portal-id="${portalId}">
+            <div class="otp-inline-copy"><strong>${portalName} devam etmek için onay bekliyor</strong><small>${escapeHtml(state.pendingMessage || message)}</small></div>
+            <div class="approval-inline-actions">
+              ${state.hasScreenshot ? `<a href="/api/jobs/${encodeURIComponent(activeJobId || "")}/screenshot/${portalId}" target="_blank" rel="noopener">Ekran görüntüsünü gör</a>` : ""}
+              <button type="button" class="approval-continue" data-portal-id="${portalId}">Devam Et</button>
+            </div>
+          </div>` : ""}
       </article>`;
   }).join("");
 
   document.querySelectorAll("#progress-list .otp-entry").forEach((form) => {
-    const input = form.querySelector("input");
+    const input = form.querySelector("input, select");
     if (input && otpDrafts.has(form.dataset.portalId)) input.value = otpDrafts.get(form.dataset.portalId);
   });
   if (focusedPortalId) {
     const nextForm = [...document.querySelectorAll("#progress-list .otp-entry")].find((form) => form.dataset.portalId === focusedPortalId);
-    const nextInput = nextForm?.querySelector("input:not(:disabled)");
+    const nextInput = nextForm?.querySelector("input:not(:disabled), select:not(:disabled)");
     if (nextInput) {
       nextInput.focus({ preventScroll: true });
-      if (focusedSelection !== null) nextInput.setSelectionRange(focusedSelection, focusedSelection);
+      if (focusedSelection !== null && nextInput.tagName === "INPUT") nextInput.setSelectionRange(focusedSelection, focusedSelection);
     }
   }
 }
 
 function renderOtp(job) {
   const waiting = Object.values(job.portalStates || {}).filter((state) => state.status === "waiting_otp" || state.status === "waiting_input");
+  const waitingApproval = Object.values(job.portalStates || {}).filter((state) => state.status === "waiting_approval");
   elements["otp-dock"].classList.add("hidden");
   elements["otp-count"].textContent = `${waiting.length} portal panelden bilgi bekliyor`;
   elements["otp-cards"].innerHTML = "";
   document.querySelectorAll(".otp-entry").forEach((form) => form.addEventListener("submit", submitInlineValue));
+  document.querySelectorAll(".otp-resend").forEach((button) => button.addEventListener("click", requestResend));
+  document.querySelectorAll(".approval-continue").forEach((button) => button.addEventListener("click", approvePortal));
 
   const waitingIds = new Set(waiting.map((state) => state.portalId));
+  const announceIds = new Set([...waitingIds, ...waitingApproval.map((state) => state.portalId)]);
   for (const portalId of [...announcedOtpPortals]) {
-    if (!waitingIds.has(portalId)) announcedOtpPortals.delete(portalId);
+    if (!announceIds.has(portalId)) announcedOtpPortals.delete(portalId);
   }
   for (const portalId of [...otpSubmissionState.keys()]) {
     if (!waitingIds.has(portalId)) otpSubmissionState.delete(portalId);
@@ -318,13 +338,14 @@ function renderOtp(job) {
   for (const portalId of [...otpErrorState.keys()]) {
     if (!waitingIds.has(portalId)) otpErrorState.delete(portalId);
   }
-  const freshOtp = waiting.find((state) => !announcedOtpPortals.has(state.portalId));
+  const freshOtp = waiting.find((state) => !announcedOtpPortals.has(state.portalId))
+    || waitingApproval.find((state) => !announcedOtpPortals.has(state.portalId));
   if (freshOtp) {
     announcedOtpPortals.add(freshOtp.portalId);
     window.requestAnimationFrame(() => {
-      const form = [...document.querySelectorAll("#progress-list .otp-entry")].find((item) => item.dataset.portalId === freshOtp.portalId);
+      const form = [...document.querySelectorAll("#progress-list .otp-entry, #progress-list .approval-inline")].find((item) => item.dataset.portalId === freshOtp.portalId);
       form?.scrollIntoView({ behavior: "smooth", block: "center" });
-      form?.querySelector("input")?.focus({ preventScroll: true });
+      form?.querySelector("input, select")?.focus({ preventScroll: true });
     });
   }
 }
@@ -358,8 +379,8 @@ function showInlineError(form, portalId, message) {
 async function submitInlineValue(event) {
   event.preventDefault();
   const form = event.currentTarget;
-  const input = form.querySelector("input");
-  const button = form.querySelector("button");
+  const input = form.querySelector("input, select");
+  const button = form.querySelector("button[type=submit]");
   const portalId = form.dataset.portalId;
   const inputId = form.dataset.inputId || "otp";
   const isOtp = inputId === "otp";
@@ -389,6 +410,43 @@ async function submitInlineValue(event) {
     input.disabled = false;
     button.textContent = isOtp ? "Kodu doğrula" : "Gönder";
     showInlineError(form, portalId, error.message);
+  }
+}
+
+async function requestResend(event) {
+  const button = event.currentTarget;
+  const portalId = button.dataset.portalId;
+  const original = button.textContent;
+  button.disabled = true;
+  button.textContent = "Gönderiliyor…";
+  try {
+    const response = await fetch(`/api/jobs/${activeJobId}/resend/${portalId}`, { method: "POST" });
+    const body = await response.json();
+    if (!response.ok) throw new Error(body.error || "Gönderilemedi");
+    button.textContent = "Yeni kod istendi";
+  } catch (error) {
+    const form = button.closest(".otp-inline");
+    if (form) showInlineError(form, portalId, error.message);
+    button.textContent = original;
+  } finally {
+    window.setTimeout(() => { button.disabled = false; if (button.textContent !== original) button.textContent = original; }, 3000);
+  }
+}
+
+async function approvePortal(event) {
+  const button = event.currentTarget;
+  const portalId = button.dataset.portalId;
+  button.disabled = true;
+  button.textContent = "Devam ediliyor…";
+  try {
+    const response = await fetch(`/api/jobs/${activeJobId}/approve/${portalId}`, { method: "POST" });
+    const body = await response.json();
+    if (!response.ok) throw new Error(body.error || "Onaylanamadı");
+    await pollJob();
+  } catch (error) {
+    showError(error.message);
+    button.disabled = false;
+    button.textContent = "Devam Et";
   }
 }
 

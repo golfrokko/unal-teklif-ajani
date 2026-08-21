@@ -1,4 +1,5 @@
 import { extractOffersFromText } from "../lib/results.mjs";
+import { RESEND_SENTINEL } from "../lib/validation.mjs";
 
 function escapeRegex(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -278,7 +279,12 @@ export async function waitForOutcome({ page, target, job, portal, resultTimeoutM
     const smsLanguage = /(SMS|TEK KULLANIMLIK|DOĞRULAMA KODU|ONAY KODU|CEP TELEFONUNUZA)/i.test(text);
     if (otpInput && smsLanguage) {
       if (job.mode === "no_sms") return { status: "skipped_sms", message: "SMS istendiği için atlandı" };
-      const code = await requestOtp();
+      let code = await requestOtp();
+      while (code === RESEND_SENTINEL) {
+        const resent = await clickNamedButton(target, [/Tekrar Gönder/i, /Yeniden Gönder/i, /Kod(?:u)? Gönder/i, /SMS Gönder/i]);
+        if (!resent) return { status: "mapping_required", message: "Kodu tekrar gönderme düğmesi bulunamadı" };
+        code = await requestOtp();
+      }
       if (!await fillOtpCode(target, code)) return { status: "mapping_required", message: "SMS kodu alanı doldurulamadı" };
       if (!await clickSubmit(target)) await otpInput.press("Enter").catch(() => {});
       await track("collecting", "SMS doğrulandı; gerçek teklifler bekleniyor");

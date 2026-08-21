@@ -1,4 +1,5 @@
 import express from "express";
+import path from "node:path";
 import { randomUUID, timingSafeEqual } from "node:crypto";
 import { config, paths } from "./config.mjs";
 import { portals } from "./portals.mjs";
@@ -9,7 +10,7 @@ import { FileStore, publicJob } from "./lib/store.mjs";
 import { normalizeOtp, normalizePhone, safeMessage, validateJobInput } from "./lib/validation.mjs";
 import { QueryEngine } from "./engine.mjs";
 
-const VERSION = "1.4.2";
+const VERSION = "1.5.0";
 const portalRegistry = new Map(portals.map((portal) => [portal.id, Object.freeze({ ...portal })]));
 const store = new FileStore({ jobsDir: paths.jobsDir, settingsFile: paths.settingsFile, retentionDays: config.retentionDays });
 const events = new JobEvents();
@@ -85,7 +86,7 @@ function basicAuth(req, res, next) {
   return res.status(401).send("Kullanıcı adı veya şifre hatalı.");
 }
 
-const engine = new QueryEngine({ store, events, browserManager, portalRegistry, config });
+const engine = new QueryEngine({ store, events, browserManager, portalRegistry, config, paths });
 const queue = new JobQueue({
   maxActive: config.maxActiveJobs,
   handler: (jobId) => engine.executeJob(jobId),
@@ -244,6 +245,31 @@ async function submitInput(req, res) {
   res.json({ ok: true });
 }
 app.post(["/api/v1/jobs/:jobId/input/:portalId/:inputId", "/api/jobs/:jobId/input/:portalId/:inputId"], submitInput);
+
+app.post(["/api/v1/jobs/:jobId/resend/:portalId", "/api/jobs/:jobId/resend/:portalId"], (req, res) => {
+  const job = store.getJob(req.params.jobId);
+  if (!job) return res.status(404).json({ error: "Sorgu bulunamadı" });
+  if (!engine.requestResend(job.id, req.params.portalId)) return res.status(409).json({ error: "Bu portal şu anda SMS kodu beklemiyor" });
+  res.json({ ok: true });
+});
+
+app.post(["/api/v1/jobs/:jobId/approve/:portalId", "/api/jobs/:jobId/approve/:portalId"], (req, res) => {
+  const job = store.getJob(req.params.jobId);
+  if (!job) return res.status(404).json({ error: "Sorgu bulunamadı" });
+  if (!engine.approvePortal(job.id, req.params.portalId)) return res.status(409).json({ error: "Bu portal şu anda onay beklemiyor" });
+  res.json({ ok: true });
+});
+
+app.get(["/api/v1/jobs/:jobId/screenshot/:portalId", "/api/jobs/:jobId/screenshot/:portalId"], (req, res) => {
+  const job = store.getJob(req.params.jobId);
+  if (!job) return res.status(404).json({ error: "Sorgu bulunamadı" });
+  const portalId = String(req.params.portalId || "");
+  if (!/^[a-z0-9_-]+$/i.test(portalId)) return res.status(400).json({ error: "Geçersiz portal" });
+  const file = path.join(paths.screenshotsDir, `${job.id}-${portalId}.jpg`);
+  res.sendFile(file, (error) => {
+    if (error && !res.headersSent) res.status(404).json({ error: "Ekran görüntüsü bulunamadı" });
+  });
+});
 
 app.post(["/api/v1/jobs/:id/cancel", "/api/jobs/:id/cancel"], async (req, res, next) => {
   try {

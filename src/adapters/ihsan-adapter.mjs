@@ -1,4 +1,5 @@
 import { extractOffersFromText } from "../lib/results.mjs";
+import { RESEND_SENTINEL } from "../lib/validation.mjs";
 import {
   acceptRequiredConsents,
   clickNamedButton,
@@ -83,14 +84,19 @@ async function revealDynamicSection(target, page) {
   return anyVisible(target, selectors);
 }
 
-async function fillSelectByUserValue(target, selector, value) {
-  const select = target.locator(selector).first();
-  const options = await select.locator("option").evaluateAll((nodes) => nodes.slice(0, 250).map((node) => ({
+async function getSelectOptions(target, selector) {
+  return target.locator(selector).first().locator("option").evaluateAll((nodes) => nodes.slice(0, 250).map((node) => ({
     value: node.value,
     label: node.textContent?.trim() || "",
     disabled: node.disabled,
-    selected: node.selected,
   }))).catch(() => []);
+}
+
+async function fillSelectByUserValue(target, selector, value) {
+  const options = await getSelectOptions(target, selector);
+  const select = target.locator(selector).first();
+  const exact = options.find((option) => option.value === value && !option.disabled);
+  if (exact) return select.selectOption(exact.value, { timeout: 4000 }).then(() => true).catch(() => false);
   const option = chooseBestOption(options, [value]);
   if (!option) return false;
   return select.selectOption(option.value, { timeout: 4000 }).then(() => true).catch(() => false);
@@ -329,7 +335,14 @@ async function completeSessionLogin({ page, target, job, portal, requestOtp, set
     if (!otpInput) return { status: "auth_required", message: `${portal.name} SMS gönderdi ancak portal kod alanını göstermedi`, diagnostics: await pageProfile(loginTarget, page) };
   }
 
-  const code = pendingCode ? await pendingCode : await requestOtp();
+  let code = pendingCode ? await pendingCode : await requestOtp();
+  while (code === RESEND_SENTINEL) {
+    const resent = await clickNamedButton(loginTarget, [/Tekrar Gönder/i, /Yeniden Gönder/i, /Kod(?:u)? Gönder/i, /SMS Gönder/i]);
+    if (!resent) {
+      return { status: "mapping_required", message: `${portal.name} kodu tekrar gönderme düğmesi bulunamadı`, diagnostics: await pageProfile(loginTarget, page) };
+    }
+    code = await requestOtp();
+  }
   if (!await fillOtpCode(loginTarget, code)) {
     return { status: "mapping_required", message: `${portal.name} SMS kodu kutuları doldurulamadı`, diagnostics: await pageProfile(loginTarget, page) };
   }
@@ -356,7 +369,34 @@ function missingInputMessage(job) {
   return `İhsan altyapılı portal için ${missing.join(" ve ")} zorunludur`;
 }
 
-async function waitForIhsanOutcome({ page, target, job, portal, resultTimeoutMs, requestOtp, requestField, setState, isCancelled }) {
+async function lookupOfferFromHistory({ page, target, job, portal }) {
+  const historyOpened = await clickNamedButton(target, [/Geçmiş Teklifler/i, /Geçmiş Sorgular/i, /Tekliflerim/i, /Sorgu Geçmişi/i]);
+  if (!historyOpened) return null;
+  await page.waitForTimeout(1200);
+  const historyTarget = await resolveTarget(page, portal);
+  const plate = job.vehicle.plate;
+  const row = historyTarget.locator(`tr:has-text("${plate}"), li:has-text("${plate}"), [class*="row" i]:has-text("${plate}")`).first();
+  if (!await row.isVisible({ timeout: 2000 }).catch(() => false)) return null;
+  const viewButton = row.getByRole("button", { name: /Teklifleri Görüntüle|Görüntüle|İncele/i }).first();
+  const viewLink = row.getByRole("link", { name: /Teklifleri Görüntüle|Görüntüle|İncele/i }).first();
+  const clicked = await viewButton.isVisible({ timeout: 500 }).then(async (visible) => {
+    if (!visible) return false;
+    await viewButton.click({ timeout: 4000 });
+    return true;
+  }).catch(() => false) || await viewLink.isVisible({ timeout: 500 }).then(async (visible) => {
+    if (!visible) return false;
+    await viewLink.click({ timeout: 4000 });
+    return true;
+  }).catch(() => false);
+  if (!clicked) return null;
+  await page.waitForTimeout(1200);
+  const resultTarget = await resolveTarget(page, portal);
+  const text = await visibleText(resultTarget);
+  const offers = extractOffersFromText(text, portal);
+  return offers.length ? offers : null;
+}
+
+async function waitForIhsanOutcome({ page, target, job, portal, resultTimeoutMs, historyLookupDelayMs, requestOtp, requestField, setState, isCancelled }) {
   const startedAt = Date.now();
   let dynamicAttempted = false;
   let lastOffers = [];
@@ -422,7 +462,11 @@ async function waitForIhsanOutcome({ page, target, job, portal, resultTimeoutMs,
       if (missingDynamic.length) {
         for (const field of missingDynamic) {
           if (isCancelled()) return { status: "cancelled", message: "Sorgu iptal edildi" };
-          const value = await requestField(field.label, field.selector).catch(() => null);
+          const choices = field.requestable ? null : (await getSelectOptions(target, field.selector))
+            .filter((option) => !option.disabled && String(option.value || "").trim())
+            .slice(0, 60)
+            .map((option) => ({ value: option.value, label: option.label || option.value }));
+          const value = await requestField(field.label, field.selector, choices).catch(() => null);
           if (!value) {
             return {
               status: "input_required",
@@ -462,6 +506,16 @@ async function waitForIhsanOutcome({ page, target, job, portal, resultTimeoutMs,
     await page.waitForTimeout(1500);
   }
   if (lastOffers.length) return { status: "completed", message: `${lastOffers.length} şirket teklifi doğrulandı`, offers: lastOffers };
+
+  if (historyLookupDelayMs > 0 && !isCancelled()) {
+    await track("collecting", `Portal doğrudan cevap vermedi; ${Math.round(historyLookupDelayMs / 1000)} saniye bekleyip geçmiş teklifler sekmesi denenecek`);
+    await page.waitForTimeout(historyLookupDelayMs);
+    if (!isCancelled()) {
+      const historyOffers = await lookupOfferFromHistory({ page, target, job, portal }).catch(() => null);
+      if (historyOffers?.length) return { status: "completed", message: `${historyOffers.length} şirket teklifi geçmiş teklifler sekmesinden alındı`, offers: historyOffers };
+    }
+  }
+
   return {
     status: "timeout",
     message: `Portal süre içinde doğrulanmış teklif veya teklif-yok cevabı vermedi (son aşama: ${lastStage})`,
@@ -496,7 +550,7 @@ export class IhsanPortalAdapter {
   }
 
   async run(context) {
-    const { page, portal, job, navigationTimeoutMs, resultTimeoutMs, setState, requestOtp, requestField, isCancelled } = context;
+    const { page, portal, job, navigationTimeoutMs, resultTimeoutMs, historyLookupDelayMs, setState, requestOtp, requestField, isCancelled } = context;
     const missing = missingInputMessage(job);
     if (missing) return { status: "input_required", message: missing };
     await setState("opening", "İhsan portalı açılıyor");
@@ -517,6 +571,6 @@ export class IhsanPortalAdapter {
     if (!await clickSubmit(target)) return { status: "mapping_required", message: "İhsan formunun Gönder düğmesi eşleştirilemedi", diagnostics: await pageProfile(target, page) };
 
     await setState("submitted", "İlk form gönderildi; portalın cevabı doğrulanıyor");
-    return waitForIhsanOutcome({ page, target, job, portal, resultTimeoutMs, requestOtp, requestField, setState, isCancelled });
+    return waitForIhsanOutcome({ page, target, job, portal, resultTimeoutMs, historyLookupDelayMs, requestOtp, requestField, setState, isCancelled });
   }
 }

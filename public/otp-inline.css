@@ -10,6 +10,58 @@
   background: #fffaf7;
 }
 
+.progress-item[data-status="waiting_approval"] .progress-row {
+  border-color: #f2caca;
+  border-bottom-right-radius: 0;
+  border-bottom-left-radius: 0;
+  background: #fff6f6;
+}
+
+.progress-row[data-status="waiting_approval"] i {
+  background: #cf5555;
+  box-shadow: 0 0 0 4px #fce3e3;
+}
+
+.approval-inline {
+  margin: 0;
+  padding: 12px;
+  border: 1px solid #f2caca;
+  border-top: 0;
+  border-radius: 0 0 9px 9px;
+  background: linear-gradient(135deg, #fff3f3, #fff);
+}
+
+.approval-inline-actions {
+  margin-top: 9px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.approval-inline-actions a {
+  color: #a74717;
+  font-size: 7px;
+  font-weight: 800;
+  text-decoration: underline;
+}
+
+.approval-continue {
+  margin-left: auto;
+  padding: 9px 16px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--orange);
+  color: #fff;
+  font-size: 8px;
+  font-weight: 850;
+  cursor: pointer;
+}
+
+.approval-continue:disabled {
+  opacity: .65;
+  cursor: not-allowed;
+}
+
 .otp-inline {
   margin: 0;
   padding: 12px;
@@ -43,7 +95,8 @@
   gap: 7px;
 }
 
-.otp-inline-fields input {
+.otp-inline-fields input,
+.otp-inline-fields select {
   min-width: 0;
   flex: 1;
   padding: 10px;
@@ -57,9 +110,32 @@
   letter-spacing: .18em;
 }
 
-.otp-inline-fields input:focus {
+.otp-inline-fields select {
+  letter-spacing: 0;
+  font-size: 10px;
+}
+
+.otp-inline-fields input:focus,
+.otp-inline-fields select:focus {
   border-color: var(--orange);
   box-shadow: 0 0 0 3px rgba(255, 118, 41, .14);
+}
+
+.otp-resend {
+  margin-top: 7px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: #a74717;
+  font-size: 7px;
+  font-weight: 800;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.otp-resend:disabled {
+  opacity: .6;
+  cursor: not-allowed;
 }
 
 .otp-inline-fields button {

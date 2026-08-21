@@ -1,7 +1,9 @@
+import { mkdir } from "node:fs/promises";
+import path from "node:path";
 import { getAdapter } from "./adapters/index.mjs";
 import { deduplicateOffers } from "./lib/results.mjs";
 import { isPortalTerminal, publicJob } from "./lib/store.mjs";
-import { safeMessage } from "./lib/validation.mjs";
+import { RESEND_SENTINEL, safeMessage } from "./lib/validation.mjs";
 
 const SUCCESS_PORTAL_STATES = new Set(["completed", "no_offer", "skipped_sms"]);
 const FAILURE_PORTAL_STATES = new Set(["mapping_required", "input_required", "access_blocked", "auth_required", "manual_required", "rate_limited", "timeout", "error", "interrupted"]);
@@ -29,12 +31,13 @@ function isRetryable(error) {
 export class QueryEngine {
   #inputWaiters = new Map();
 
-  constructor({ store, events, browserManager, portalRegistry, config }) {
+  constructor({ store, events, browserManager, portalRegistry, config, paths }) {
     this.store = store;
     this.events = events;
     this.browserManager = browserManager;
     this.portalRegistry = portalRegistry;
     this.config = config;
+    this.paths = paths;
     this.lastError = null;
   }
 
@@ -98,6 +101,18 @@ export class QueryEngine {
     return true;
   }
 
+  requestResend(jobId, portalId) {
+    return this.submitInput(jobId, portalId, "otp", RESEND_SENTINEL);
+  }
+
+  approvePortal(jobId, portalId) {
+    const key = `${jobId}:${portalId}:approval`;
+    const waiter = this.#inputWaiters.get(key);
+    if (!waiter) return false;
+    waiter.resolve();
+    return true;
+  }
+
   async cancel(jobId) {
     const job = this.store.getJob(jobId);
     if (!job || ["completed", "partial", "failed", "cancelled", "interrupted"].includes(job.status)) return false;
@@ -134,31 +149,42 @@ export class QueryEngine {
     const adapter = getAdapter(portal);
     for (let attempt = 0; attempt <= this.config.retryCount; attempt += 1) {
       try {
-        const outcome = await this.browserManager.withPortalPage(portal, (page) => adapter.run({
-          page,
-          portal,
-          job,
-          navigationTimeoutMs: portal.navigationTimeoutMs || this.config.navigationTimeoutMs,
-          resultTimeoutMs: portal.resultTimeoutMs || this.config.resultTimeoutMs,
-          isCancelled: () => Boolean(job.cancelRequested),
-          setState: (status, message, extra = {}) => this.#setPortalState(job, portal, status, message, { attempt: attempt + 1, ...extra }),
-          requestOtp: () => this.#waitForInput(job, portal, {
-            inputId: "otp",
-            status: "waiting_otp",
-            message: `${job.phone} numarasına gelen SMS kodu bekleniyor`,
-          }),
-          requestField: (label, inputId = label) => this.#waitForInput(job, portal, {
-            inputId,
-            status: "waiting_input",
-            message: `"${label}" bilgisi panelden bekleniyor`,
-            extra: { inputLabel: label },
-          }),
-        }));
+        const outcome = await this.browserManager.withPortalPage(portal, async (page) => {
+          const result = await adapter.run({
+            page,
+            portal,
+            job,
+            navigationTimeoutMs: portal.navigationTimeoutMs || this.config.navigationTimeoutMs,
+            resultTimeoutMs: portal.resultTimeoutMs || this.config.resultTimeoutMs,
+            historyLookupDelayMs: this.config.historyLookupDelayMs,
+            isCancelled: () => Boolean(job.cancelRequested),
+            setState: (status, message, extra = {}) => this.#setPortalState(job, portal, status, message, { attempt: attempt + 1, ...extra }),
+            requestOtp: () => this.#waitForInput(job, portal, {
+              inputId: "otp",
+              status: "waiting_otp",
+              message: `${job.phone} numarasına gelen SMS kodu bekleniyor`,
+            }),
+            requestField: (label, inputId = label, choices = null) => this.#waitForInput(job, portal, {
+              inputId,
+              status: "waiting_input",
+              message: `"${label}" bilgisi panelden bekleniyor`,
+              extra: { inputLabel: label, ...(choices?.length ? { inputChoices: choices } : {}) },
+            }),
+          });
+          if (result.status && FAILURE_PORTAL_STATES.has(result.status)) {
+            result.screenshotPath = await this.#captureScreenshot(page, job.id, portal.id);
+          }
+          return result;
+        });
         if (outcome.offers?.length) job.results.push(...outcome.offers);
+        if (FAILURE_PORTAL_STATES.has(outcome.status)) {
+          await this.#waitForApproval(job, portal, outcome);
+        }
         await this.#setPortalState(job, portal, outcome.status, outcome.message, {
           offerCount: outcome.offers?.length || 0,
           attempt: attempt + 1,
           ...(outcome.diagnostics ? { diagnostics: outcome.diagnostics } : {}),
+          ...(outcome.screenshotPath ? { hasScreenshot: true } : {}),
         });
         return;
       } catch (error) {
@@ -201,6 +227,45 @@ export class QueryEngine {
         },
       });
       await this.#setPortalState(job, portal, status, message, { inputId, ...extra });
+    });
+  }
+
+  async #captureScreenshot(page, jobId, portalId) {
+    if (!this.paths?.screenshotsDir) return false;
+    try {
+      await mkdir(this.paths.screenshotsDir, { recursive: true, mode: 0o700 });
+      const file = path.join(this.paths.screenshotsDir, `${jobId}-${portalId}.jpg`);
+      await page.screenshot({ path: file, type: "jpeg", quality: 65, timeout: 5000 });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  #waitForApproval(job, portal, outcome) {
+    const key = `${job.id}:${portal.id}:approval`;
+    return new Promise(async (resolve) => {
+      const timeout = setTimeout(() => {
+        this.#inputWaiters.delete(key);
+        resolve();
+      }, this.config.approvalTimeoutMs);
+      this.#inputWaiters.set(key, {
+        resolve: () => {
+          clearTimeout(timeout);
+          this.#inputWaiters.delete(key);
+          resolve();
+        },
+        reject: () => {
+          clearTimeout(timeout);
+          this.#inputWaiters.delete(key);
+          resolve();
+        },
+      });
+      await this.#setPortalState(job, portal, "waiting_approval", `${portal.name} bu sonuçla bitti: "${outcome.message}". Sıradaki portala geçmek için onayınız bekleniyor.`, {
+        pendingStatus: outcome.status,
+        pendingMessage: outcome.message,
+        ...(outcome.screenshotPath ? { hasScreenshot: true } : {}),
+      });
     });
   }
 

@@ -1,3 +1,5 @@
+export const RESEND_SENTINEL = "__RESEND__";
+
 export function normalizePhone(value) {
   let digits = String(value || "").replace(/\D/g, "");
   if (digits.startsWith("90") && digits.length === 12) digits = digits.slice(2);
