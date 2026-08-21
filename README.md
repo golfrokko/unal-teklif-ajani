@@ -1,15 +1,17 @@
-# Ünal Sigorta Teklif Ajanı v1.1.5
+# Ünal Sigorta Teklif Ajanı v1.3.0
 
 Easypanel üzerinde çalışan, yetkili sigorta portallarındaki trafik tekliflerini kalıcı bir kuyrukta toplayan çevrimiçi sorgu altyapısıdır. Formun gönderilmesi başarı sayılmaz; yalnızca şirket ve fiyat verisi okunabilen sonuçlar teklif listesine girer.
 
 ## Canlı entegrasyon durumu
 
-- Dokuz İhsan tabanlı portal için iki aşamalı ortak adaptör bulunur; diğer 16 portal özel adaptörü tamamlanana kadar kapalıdır.
+- Dokuz İhsan tabanlı portal için iki aşamalı ortak adaptör; teklif formu canlı keşifte doğrulanan diğer portallar için iframe/popup destekli genel adaptör bulunur.
 - Sigorta Lion oturumu kapalıysa telefon/SMS girişi açılır; doğrulanan oturum kalıcı tarayıcı durumunda sonraki sorgular için korunur.
+- Enuygun ve Hepiyi gibi SMS'i telefon adımından sonra gönderen portallarda kod kutusu, SMS istenir istenmez panelde açılır.
+- E-posta isteyen portallar için sorgu ekranındaki teklif e-postası kullanılır; `DEFAULT_EMAIL` ile varsayılan değer tanımlanabilir.
 - İlk formdan sonra açılan araç cinsi, model yılı, marka/tip, şasi ve motor alanları ikinci aşamada doldurulur.
 - Cloudflare/CAPTCHA, eksik veri, alan eşleme hatası ve zaman aşımı birbirinden ayrı durumlar olarak gösterilir.
-- Diğer portallar özel adaptörleri tamamlanana kadar varsayılan olarak kapalıdır. Arayüzde listelenmeleri canlı çalıştıkları anlamına gelmez.
-- Sunucu açılışında dokuz İhsan portalı üzerinde kişisel veri göndermeyen form teşhisi çalışır. Son durum `/health` içindeki `portalProbes` alanında görülür.
+- Yönlendirme, müşteri girişi, CAPTCHA, bozuk istemci uygulaması ve alan eşleme gereksinimleri ayrı durumlar olarak gösterilir; bunlar teklif alınmış gibi sayılmaz.
+- Sunucu açılışında 25 kayıt üzerinde kişisel veri göndermeyen form teşhisi çalışır. Son durum `/health` içindeki `portalProbes` alanında görülür.
 
 ## Mimari
 
@@ -37,6 +39,7 @@ Ortam değişkenleri:
 PANEL_USER=unal
 PANEL_PASSWORD=guclu-ve-benzersiz-bir-sifre
 DEFAULT_PHONE=05XXXXXXXXX
+DEFAULT_EMAIL=teklif@example.com
 MAX_CONCURRENCY=3
 MAX_ACTIVE_JOBS=1
 HEADLESS=true
