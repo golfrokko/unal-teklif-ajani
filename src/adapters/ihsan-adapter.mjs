@@ -397,7 +397,19 @@ export class IhsanPortalAdapter {
     const profile = await pageProfile(target, page);
     const hasIdentity = profile.labels.some((label) => /KİMLİK/i.test(label)) || profile.controls.some((control) => /kimlik|identity|\btc\b/i.test(`${control.name} ${control.placeholder}`));
     const hasPlate = profile.labels.some((label) => /PLAKA/i.test(label)) || profile.controls.some((control) => /plaka|plate/i.test(`${control.name} ${control.placeholder}`));
-    return { state: hasIdentity && hasPlate ? "form_detected" : "mapping_required", ...profile };
+    let sessionProfile = null;
+    if (portal.smsPolicy === "session_once" && await namedControlVisible(target, [/^Giriş Yap$/i])) {
+      await clickNamedButton(target, [/^Giriş Yap$/i]);
+      await page.waitForTimeout(700);
+      const activeTarget = await latestSessionTarget(page, target, portal);
+      const loginTarget = await sessionDialogTarget(activeTarget);
+      sessionProfile = await pageProfile(loginTarget, page);
+    }
+    return {
+      state: hasIdentity && hasPlate ? "form_detected" : "mapping_required",
+      ...profile,
+      ...(sessionProfile ? { sessionProfile } : {}),
+    };
   }
 
   async run(context) {
