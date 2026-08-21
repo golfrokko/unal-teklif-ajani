@@ -27,7 +27,7 @@ function isRetryable(error) {
 }
 
 export class QueryEngine {
-  #otpWaiters = new Map();
+  #inputWaiters = new Map();
 
   constructor({ store, events, browserManager, portalRegistry, config }) {
     this.store = store;
@@ -87,10 +87,14 @@ export class QueryEngine {
   }
 
   submitOtp(jobId, portalId, code) {
-    const key = `${jobId}:${portalId}`;
-    const waiter = this.#otpWaiters.get(key);
+    return this.submitInput(jobId, portalId, "otp", code);
+  }
+
+  submitInput(jobId, portalId, inputId, value) {
+    const key = `${jobId}:${portalId}:${inputId}`;
+    const waiter = this.#inputWaiters.get(key);
     if (!waiter) return false;
-    waiter.resolve(code);
+    waiter.resolve(value);
     return true;
   }
 
@@ -99,7 +103,7 @@ export class QueryEngine {
     if (!job || ["completed", "partial", "failed", "cancelled", "interrupted"].includes(job.status)) return false;
     job.cancelRequested = true;
     if (job.status !== "queued") job.status = "cancelling";
-    for (const [key, waiter] of this.#otpWaiters) {
+    for (const [key, waiter] of this.#inputWaiters) {
       if (key.startsWith(`${jobId}:`)) waiter.reject(new Error("Sorgu iptal edildi"));
     }
     await this.#saveAndPublish(job, "job.cancelling");
@@ -138,7 +142,17 @@ export class QueryEngine {
           resultTimeoutMs: portal.resultTimeoutMs || this.config.resultTimeoutMs,
           isCancelled: () => Boolean(job.cancelRequested),
           setState: (status, message, extra = {}) => this.#setPortalState(job, portal, status, message, { attempt: attempt + 1, ...extra }),
-          requestOtp: () => this.#waitForOtp(job, portal),
+          requestOtp: () => this.#waitForInput(job, portal, {
+            inputId: "otp",
+            status: "waiting_otp",
+            message: `${job.phone} numarasına gelen SMS kodu bekleniyor`,
+          }),
+          requestField: (label, inputId = label) => this.#waitForInput(job, portal, {
+            inputId,
+            status: "waiting_input",
+            message: `"${label}" bilgisi panelden bekleniyor`,
+            extra: { inputLabel: label },
+          }),
         }));
         if (outcome.offers?.length) job.results.push(...outcome.offers);
         await this.#setPortalState(job, portal, outcome.status, outcome.message, {
@@ -167,26 +181,26 @@ export class QueryEngine {
     }
   }
 
-  #waitForOtp(job, portal) {
-    const key = `${job.id}:${portal.id}`;
+  #waitForInput(job, portal, { inputId, status, message, extra = {} }) {
+    const key = `${job.id}:${portal.id}:${inputId}`;
     return new Promise(async (resolve, reject) => {
       const timeout = setTimeout(() => {
-        this.#otpWaiters.delete(key);
-        reject(new Error("SMS kodu zaman aşımına uğradı"));
+        this.#inputWaiters.delete(key);
+        reject(new Error(`${inputId} zaman aşımına uğradı`));
       }, this.config.otpTimeoutMs);
-      this.#otpWaiters.set(key, {
-        resolve: (code) => {
+      this.#inputWaiters.set(key, {
+        resolve: (value) => {
           clearTimeout(timeout);
-          this.#otpWaiters.delete(key);
-          resolve(code);
+          this.#inputWaiters.delete(key);
+          resolve(value);
         },
         reject: (error) => {
           clearTimeout(timeout);
-          this.#otpWaiters.delete(key);
+          this.#inputWaiters.delete(key);
           reject(error);
         },
       });
-      await this.#setPortalState(job, portal, "waiting_otp", `${job.phone} numarasına gelen SMS kodu bekleniyor`);
+      await this.#setPortalState(job, portal, status, message, { inputId, ...extra });
     });
   }
 

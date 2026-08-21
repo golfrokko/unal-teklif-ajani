@@ -234,6 +234,17 @@ async function submitOtp(req, res) {
 }
 app.post(["/api/v1/jobs/:jobId/otp/:portalId", "/api/jobs/:jobId/otp/:portalId"], submitOtp);
 
+async function submitInput(req, res) {
+  const job = store.getJob(req.params.jobId);
+  if (!job) return res.status(404).json({ error: "Sorgu bulunamadı" });
+  const inputId = String(req.params.inputId || "").trim();
+  const value = String(req.body?.value ?? "").trim().slice(0, 300);
+  if (!inputId || !value) return res.status(400).json({ error: "Geçerli bir değer girin" });
+  if (!engine.submitInput(job.id, req.params.portalId, inputId, value)) return res.status(409).json({ error: "Bu portal şu anda bu bilgiyi beklemiyor" });
+  res.json({ ok: true });
+}
+app.post(["/api/v1/jobs/:jobId/input/:portalId/:inputId", "/api/jobs/:jobId/input/:portalId/:inputId"], submitInput);
+
 app.post(["/api/v1/jobs/:id/cancel", "/api/jobs/:id/cancel"], async (req, res, next) => {
   try {
     const job = store.getJob(req.params.id);

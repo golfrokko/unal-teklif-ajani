@@ -99,7 +99,9 @@ async function missingVisibleDynamicFields(target) {
     const control = target.locator(selector).first();
     if (!await control.isVisible({ timeout: 200 }).catch(() => false)) continue;
     const value = await control.inputValue({ timeout: 500 }).catch(() => "");
-    if (!String(value || "").trim()) missing.push(label);
+    if (String(value || "").trim()) continue;
+    const tag = await control.evaluate((element) => element.tagName.toLowerCase()).catch(() => "select");
+    missing.push({ label, selector, requestable: tag === "input" });
   }
   return missing;
 }
@@ -335,7 +337,7 @@ function missingInputMessage(job) {
   return `İhsan altyapılı portal için ${missing.join(" ve ")} zorunludur`;
 }
 
-async function waitForIhsanOutcome({ page, target, job, portal, resultTimeoutMs, requestOtp, setState, isCancelled }) {
+async function waitForIhsanOutcome({ page, target, job, portal, resultTimeoutMs, requestOtp, requestField, setState, isCancelled }) {
   const startedAt = Date.now();
   let dynamicAttempted = false;
   let lastOffers = [];
@@ -348,7 +350,7 @@ async function waitForIhsanOutcome({ page, target, job, portal, resultTimeoutMs,
     if (await detectCaptcha(page, text)) return { status: "manual_required", message: "CAPTCHA / güvenlik kontrolü kullanıcı tarafından tamamlanmalı" };
 
     if (!sessionChallengeCompleted) {
-      const sessionOutcome = await completeSessionLogin({ page, target, job, portal, requestOtp, setState, openIfNeeded: false });
+      const sessionOutcome = await completeSessionLogin({ page, target, job, portal, requestOtp, setState, openIfNeeded: true });
       if (sessionOutcome?.status) return sessionOutcome;
       if (sessionOutcome?.handled) {
         sessionChallengeCompleted = true;
@@ -390,15 +392,32 @@ async function waitForIhsanOutcome({ page, target, job, portal, resultTimeoutMs,
         return { status: "mapping_required", message: "Ekstra araç bilgileri bölümü açılamadı", diagnostics: await pageProfile(target, page) };
       }
       const dynamic = await fillIhsanFields(target, job, { includeDynamic: true, page });
-      const changed = ["vehicleType", "yearSelect", "brandSelect", "typeSelect", "yearInput", "chassis", "engine"]
+      let changed = ["vehicleType", "yearSelect", "brandSelect", "typeSelect", "yearInput", "chassis", "engine"]
         .some((key) => dynamic[key]);
       const missingDynamic = await missingVisibleDynamicFields(target);
       if (missingDynamic.length) {
-        return {
-          status: "input_required",
-          message: `Portalın ek araç alanları tamamlanamadı: ${missingDynamic.join(", ")}`,
-          diagnostics: await pageProfile(target, page),
-        };
+        const blocking = missingDynamic.filter((field) => !field.requestable);
+        if (blocking.length) {
+          return {
+            status: "input_required",
+            message: `Portalın ek araç alanları tamamlanamadı: ${missingDynamic.map((field) => field.label).join(", ")}`,
+            diagnostics: await pageProfile(target, page),
+          };
+        }
+        for (const field of missingDynamic) {
+          if (isCancelled()) return { status: "cancelled", message: "Sorgu iptal edildi" };
+          const value = await requestField(field.label, field.selector).catch(() => null);
+          if (!value) {
+            return {
+              status: "input_required",
+              message: `"${field.label}" bilgisi için panelden yanıt alınamadı`,
+              diagnostics: await pageProfile(target, page),
+            };
+          }
+          await target.locator(field.selector).first().fill(value, { timeout: 3000 }).catch(() => {});
+          changed = true;
+        }
+        await setState("filling", "Panelden girilen ek bilgiler dolduruldu");
       }
       if (changed && await clickSubmit(target)) {
         await setState("submitted", "Ek araç bilgileri gönderildi; portal cevabı bekleniyor");
@@ -448,7 +467,7 @@ export class IhsanPortalAdapter {
   }
 
   async run(context) {
-    const { page, portal, job, navigationTimeoutMs, resultTimeoutMs, setState, requestOtp, isCancelled } = context;
+    const { page, portal, job, navigationTimeoutMs, resultTimeoutMs, setState, requestOtp, requestField, isCancelled } = context;
     const missing = missingInputMessage(job);
     if (missing) return { status: "input_required", message: missing };
     await setState("opening", "İhsan portalı açılıyor");
@@ -460,9 +479,6 @@ export class IhsanPortalAdapter {
     if (BLOCK_PATTERN.test(firstText)) return { status: "access_blocked", message: "Portal güvenlik duvarı bu sunucunun erişimini engelledi" };
     if (await detectCaptcha(page, firstText)) return { status: "manual_required", message: "CAPTCHA / güvenlik kontrolü kullanıcı tarafından tamamlanmalı" };
     const target = await resolveTarget(page, portal);
-    const sessionOutcome = await completeSessionLogin({ page, target, job, portal, requestOtp, setState });
-    if (sessionOutcome?.status) return sessionOutcome;
-
     const initialState = pageState(await visibleText(target));
     if (initialState) return { status: initialState, message: initialState === "auth_required" ? "Portal oturumu açılmalı" : "Portal isteği kabul etmedi" };
     await setState("filling", "Kimlik, plaka ve ruhsat bilgileri dolduruluyor");
@@ -472,6 +488,6 @@ export class IhsanPortalAdapter {
     if (!await clickSubmit(target)) return { status: "mapping_required", message: "İhsan formunun Gönder düğmesi eşleştirilemedi", diagnostics: await pageProfile(target, page) };
 
     await setState("submitted", "İlk form gönderildi; portalın cevabı doğrulanıyor");
-    return waitForIhsanOutcome({ page, target, job, portal, resultTimeoutMs, requestOtp, setState, isCancelled });
+    return waitForIhsanOutcome({ page, target, job, portal, resultTimeoutMs, requestOtp, requestField, setState, isCancelled });
   }
 }
