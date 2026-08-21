@@ -286,36 +286,36 @@ async function completeSessionLogin({ page, target, job, portal, requestOtp, set
       return {
         status: "auth_required",
         message: /(ŞİFRE|PASSWORD|E-?POSTA)/i.test(text)
-          ? "Lion oturumu kullanıcı adı/şifre istiyor; portal oturumu bir kez manuel açılmalı"
-          : "Lion giriş penceresindeki telefon alanı eşleştirilemedi",
+          ? `${portal.name} oturumu kullanıcı adı/şifre istiyor; portal oturumu bir kez manuel açılmalı`
+          : `${portal.name} giriş penceresindeki telefon alanı eşleştirilemedi`,
         diagnostics: await pageProfile(loginTarget, page),
       };
     }
     const sent = await clickNamedButton(loginTarget, [/Kod(?:u)? Gönder/i, /SMS Gönder/i, /Devam/i, /^Giriş Yap$/i]);
     if (!sent) {
-      return { status: "mapping_required", message: "Lion SMS gönderme düğmesi eşleştirilemedi", diagnostics: await pageProfile(loginTarget, page) };
+      return { status: "mapping_required", message: `${portal.name} SMS gönderme düğmesi eşleştirilemedi`, diagnostics: await pageProfile(loginTarget, page) };
     }
     // SMS isteği portal tarafından kabul edildiği anda panelde kod alanını aç.
     // Portalın tek kutu veya parçalı OTP arayüzünü çizmesini beklemek kullanıcı
     // tarafındaki kod girişini geciktirmemeli.
     pendingCode = requestOtp();
-    otpInput = await waitForSessionOtp(loginTarget, page);
+    otpInput = await waitForSessionOtp(loginTarget, page, 30000);
   }
 
   if (!otpInput) {
     if (pendingCode) {
       await pendingCode;
-      otpInput = await waitForSessionOtp(loginTarget, page, 8000);
+      otpInput = await waitForSessionOtp(loginTarget, page, 20000);
     }
-    if (!otpInput) return { status: "auth_required", message: "Lion SMS gönderdi ancak portal kod alanını göstermedi", diagnostics: await pageProfile(loginTarget, page) };
+    if (!otpInput) return { status: "auth_required", message: `${portal.name} SMS gönderdi ancak portal kod alanını göstermedi`, diagnostics: await pageProfile(loginTarget, page) };
   }
 
   const code = pendingCode ? await pendingCode : await requestOtp();
   if (!await fillOtpCode(loginTarget, code)) {
-    return { status: "mapping_required", message: "Lion SMS kodu kutuları doldurulamadı", diagnostics: await pageProfile(loginTarget, page) };
+    return { status: "mapping_required", message: `${portal.name} SMS kodu kutuları doldurulamadı`, diagnostics: await pageProfile(loginTarget, page) };
   }
   if (!await clickNamedButton(loginTarget, [/Doğrula/i, /Onayla/i, /^Giriş Yap$/i, /Devam/i])) await otpInput.press("Enter").catch(() => {});
-  const verificationDeadline = Date.now() + 8000;
+  const verificationDeadline = Date.now() + 15000;
   let stillWaiting = true;
   while (Date.now() < verificationDeadline) {
     await page.waitForTimeout(500);
@@ -323,9 +323,9 @@ async function completeSessionLogin({ page, target, job, portal, requestOtp, set
     if (!stillWaiting) break;
   }
   if (stillWaiting) {
-    return { status: "auth_required", message: "Lion SMS kodunu kabul etmedi; kodu ve süresini kontrol edin", diagnostics: await pageProfile(loginTarget, page) };
+    return { status: "auth_required", message: `${portal.name} SMS kodunu kabul etmedi; kodu ve süresini kontrol edin`, diagnostics: await pageProfile(loginTarget, page) };
   }
-  await setState("filling", "Lion oturumu açıldı; araç sorgusu hazırlanıyor");
+  await setState("filling", `${portal.name} oturumu açıldı; araç sorgusu hazırlanıyor`);
   return { handled: true };
 }
 

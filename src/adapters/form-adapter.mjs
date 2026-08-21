@@ -93,7 +93,7 @@ export async function fillQuoteForm(target, job) {
 }
 
 export async function clickSubmit(target) {
-  for (const name of [/Gönder/i, /Teklif(?:i)? Al/i, /Sorgula/i, /Devam/i, /Hemen Teklif/i, /Doğrula/i, /Onayla/i]) {
+  for (const name of [/Gönder/i, /Teklif(?:i)? Al/i, /Sorgula/i, /Devam/i, /Hemen Teklif/i, /Doğrula/i, /Onayla/i, /Fiyat(?:ları)? (?:Gör|Getir|Hesapla)/i, /Karşılaştır/i, /Teklifleri Görüntüle/i, /Devam Et/i, /İleri/i, /Hesapla/i]) {
     try {
       const button = target.getByRole("button", { name }).first();
       if (await button.isVisible({ timeout: 500 }) && await button.isEnabled({ timeout: 500 })) {

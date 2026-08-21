@@ -19,7 +19,7 @@ export const config = Object.freeze({
   maxConcurrency: boundedNumber(process.env.MAX_CONCURRENCY, 3, 1, 5),
   maxActiveJobs: boundedNumber(process.env.MAX_ACTIVE_JOBS, 1, 1, 2),
   navigationTimeoutMs: boundedNumber(process.env.NAVIGATION_TIMEOUT_MS, 45000, 10000, 120000),
-  resultTimeoutMs: boundedNumber(process.env.RESULT_TIMEOUT_MS, 120000, 30000, 300000),
+  resultTimeoutMs: boundedNumber(process.env.RESULT_TIMEOUT_MS, 180000, 30000, 300000),
   otpTimeoutMs: boundedNumber(process.env.OTP_TIMEOUT_MS, 300000, 60000, 600000),
   retryCount: boundedNumber(process.env.PORTAL_RETRY_COUNT, 1, 0, 2),
   retentionDays: boundedNumber(process.env.JOB_RETENTION_DAYS, 30, 1, 365),
