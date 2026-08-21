@@ -1,6 +1,14 @@
-# Ünal Sigorta Teklif Ajanı v1
+# Ünal Sigorta Teklif Ajanı v1.1
 
 Easypanel üzerinde çalışan, yetkili sigorta portallarındaki trafik tekliflerini kalıcı bir kuyrukta toplayan çevrimiçi sorgu altyapısıdır. Formun gönderilmesi başarı sayılmaz; yalnızca şirket ve fiyat verisi okunabilen sonuçlar teklif listesine girer.
+
+## Canlı entegrasyon durumu
+
+- Sigorta Lion, Bi Tıkla Sigorta ve SigortaBaz için iki aşamalı İhsan adaptörü bulunur.
+- İlk formdan sonra açılan araç cinsi, model yılı, marka/tip, şasi ve motor alanları ikinci aşamada doldurulur.
+- Cloudflare/CAPTCHA, eksik veri, alan eşleme hatası ve zaman aşımı birbirinden ayrı durumlar olarak gösterilir.
+- Diğer portallar özel adaptörleri tamamlanana kadar varsayılan olarak kapalıdır. Arayüzde listelenmeleri canlı çalıştıkları anlamına gelmez.
+- Sunucu açılışında ilk üç portal üzerinde kişisel veri göndermeyen form teşhisi çalışır. Son durum `/health` içindeki `portalProbes` alanında görülür.
 
 ## Mimari
 
