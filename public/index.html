@@ -13,6 +13,7 @@
     <nav>
       <a class="active" href="#new-query">＋ Yeni sorgu</a>
       <a href="#progress">↻ Sorgu durumu</a>
+      <a href="#log">▤ Sorgu günlüğü</a>
       <a href="#portals">⌘ Portal havuzu</a>
       <a href="#results">▤ Teklif sonuçları</a>
     </nav>
@@ -83,8 +84,13 @@
     </section>
 
     <section class="card progress-section hidden" id="progress">
-      <div class="section-head"><div><span class="eyebrow orange">CANLI SORGULAMA</span><h3 id="progress-title">Portallar sıraya alındı</h3><p id="progress-subtitle">Beşerli gruplar hâlinde ilerliyor.</p></div><span id="job-status" class="status-pill">Hazırlanıyor</span></div>
+      <div class="section-head"><div><span class="eyebrow orange">CANLI SORGULAMA</span><h3 id="progress-title">Portallar sıraya alındı</h3><p id="progress-subtitle">Beşerli gruplar hâlinde ilerliyor.</p></div><div class="progress-actions"><span id="job-status" class="status-pill">Hazırlanıyor</span><button id="cancel-button" class="cancel-button hidden" type="button">Sorguyu durdur</button></div></div>
       <div id="progress-list" class="progress-list"></div>
+    </section>
+
+    <section class="card log-section hidden" id="log">
+      <div class="section-head"><div><span class="eyebrow orange">SORGU GÜNLÜĞÜ</span><h3>Adım adım takip</h3><p>Her portalda ne olduğu, anlaşılır cümlelerle burada listelenir.</p></div><b id="log-count" class="result-count">0 kayıt</b></div>
+      <div id="log-list" class="log-list"></div>
     </section>
 
     <section class="card results-section hidden" id="results">

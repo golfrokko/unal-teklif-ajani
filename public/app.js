@@ -33,7 +33,8 @@ const statusNames = {
 const elements = Object.fromEntries([
   "raw-data", "identity", "birth-date", "plate", "registration", "vehicle", "year", "chassis", "engine",
   "phone", "email", "consent", "start-button", "parse-status", "portal-groups", "progress", "progress-list",
-  "progress-title", "progress-subtitle", "job-status", "results", "results-body", "result-count", "otp-dock",
+  "progress-title", "progress-subtitle", "job-status", "cancel-button", "log", "log-list", "log-count",
+  "results", "results-body", "result-count", "otp-dock",
   "otp-cards", "otp-count", "error-banner", "portal-count", "max-concurrency", "concurrency-stat"
 ].map((id) => [id, document.getElementById(id)]));
 
@@ -46,6 +47,10 @@ const ACTIVE_JOB_STATUSES = new Set(["queued", "running", "cancelling"]);
 const ACTIVE_JOB_STORAGE_KEY = "unal-teklif-active-job";
 let portalRefreshTimer = null;
 let portalSelectionTouched = false;
+let jobLog = [];
+let loggedJobId = null;
+let loggedJobStatus = null;
+const loggedPortalUpdates = new Map();
 
 function rememberActiveJob(jobId) {
   activeJobId = jobId || null;
@@ -62,6 +67,54 @@ function escapeHtml(value) {
   return String(value ?? "").replace(/[&<>"']/g, (character) => ({
     "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;",
   })[character]);
+}
+
+const LOG_LEVELS = {
+  success: ["completed", "no_offer"],
+  error: ["error", "timeout", "mapping_required", "input_required", "access_blocked", "auth_required", "manual_required", "rate_limited", "failed"],
+  warn: ["skipped_sms", "cancelled", "interrupted", "retrying", "partial"],
+};
+function logLevelForStatus(status) {
+  if (LOG_LEVELS.success.includes(status)) return "success";
+  if (LOG_LEVELS.error.includes(status)) return "error";
+  if (LOG_LEVELS.warn.includes(status)) return "warn";
+  return "info";
+}
+
+function renderLog() {
+  elements.log.classList.toggle("hidden", jobLog.length === 0);
+  elements["log-count"].textContent = `${jobLog.length} kayıt`;
+  elements["log-list"].innerHTML = jobLog.length
+    ? [...jobLog].reverse().map((entry) => `<div class="log-row" data-level="${entry.level}"><time>${entry.time.toLocaleTimeString("tr-TR")}</time><i></i><p>${entry.html}</p></div>`).join("")
+    : `<div class="log-empty">Henüz kayıt yok.</div>`;
+}
+
+function appendLog(html, level = "info") {
+  jobLog.push({ time: new Date(), html, level });
+  if (jobLog.length > 300) jobLog.shift();
+  renderLog();
+}
+
+function updateJobLog(job) {
+  if (job.id !== loggedJobId) {
+    jobLog = [];
+    loggedPortalUpdates.clear();
+    loggedJobStatus = null;
+    loggedJobId = job.id;
+    appendLog(`Sorgu izleniyor (${Object.keys(job.portalStates || {}).length} portal).`, "info");
+  }
+  for (const state of Object.values(job.portalStates || {})) {
+    if (loggedPortalUpdates.get(state.portalId) === state.updatedAt) continue;
+    loggedPortalUpdates.set(state.portalId, state.updatedAt);
+    const label = statusNames[state.status] || state.status;
+    const detail = state.message && state.message !== label ? state.message : label;
+    appendLog(`<b>${escapeHtml(state.portalName)}</b> — ${escapeHtml(detail)}`, logLevelForStatus(state.status));
+  }
+  if (job.status !== loggedJobStatus) {
+    loggedJobStatus = job.status;
+    const jobLabels = { completed: "Sorgu tamamlandı.", partial: "Sorgu kısmi sonuçla tamamlandı.", failed: "Sorgu başarısız oldu.", cancelled: "Sorgu iptal edildi.", interrupted: "Sorgu sunucu yeniden başladığı için kesintiye uğradı." };
+    if (jobLabels[job.status]) appendLog(jobLabels[job.status], logLevelForStatus(job.status));
+  }
 }
 
 async function fetchJson(url, options = {}, timeoutMs = 15000) {
@@ -199,6 +252,10 @@ function renderProgress(job) {
   elements["progress-title"].textContent = `${done} / ${states.length} portal tamamlandı`;
   elements["progress-subtitle"].textContent = job.mode === "no_sms" ? "SMS isteyen portallar otomatik atlanıyor." : "SMS isteyen portallar kod baloncuğunda bekliyor.";
   elements["job-status"].textContent = ({ completed: "Sorgu tamamlandı", partial: "Kısmi tamamlandı", failed: "Sorgu başarısız", cancelled: "İptal edildi", interrupted: "Kesintiye uğradı" })[job.status] || "Sorgulanıyor";
+  const cancellable = ["queued", "running", "cancelling"].includes(job.status);
+  elements["cancel-button"].classList.toggle("hidden", !cancellable);
+  elements["cancel-button"].disabled = job.status === "cancelling";
+  elements["cancel-button"].textContent = job.status === "cancelling" ? "İptal ediliyor…" : "Sorguyu durdur";
   elements["progress-list"].innerHTML = states.map((state) => {
     const portalId = escapeHtml(state.portalId);
     const portalName = escapeHtml(state.portalName);
@@ -309,6 +366,7 @@ async function pollJob() {
     renderProgress(job);
     renderOtp(job);
     renderResults(job);
+    updateJobLog(job);
     if (["completed", "partial", "failed", "cancelled", "interrupted"].includes(job.status)) {
       window.clearInterval(pollTimer);
       pollTimer = null;
@@ -340,6 +398,7 @@ async function startJob() {
     }, 15000);
     rememberActiveJob(body.id);
     renderProgress(body);
+    updateJobLog(body);
     elements.progress.scrollIntoView({ behavior: "smooth", block: "start" });
     startPolling();
     await pollJob();
@@ -372,6 +431,7 @@ async function boot() {
       renderProgress(resumable);
       renderOtp(resumable);
       renderResults(resumable);
+      updateJobLog(resumable);
       startPolling();
       await pollJob();
     } else {
@@ -400,6 +460,19 @@ elements["sample-button"].addEventListener("click", () => { elements["raw-data"]
 document.getElementById("clear-button").addEventListener("click", () => { elements["raw-data"].value = ""; setParsed({}); });
 elements.phone.addEventListener("blur", () => { elements.phone.value = formatPhone(elements.phone.value); });
 elements["start-button"].addEventListener("click", startJob);
+elements["cancel-button"].addEventListener("click", async () => {
+  if (!activeJobId) return;
+  elements["cancel-button"].disabled = true;
+  elements["cancel-button"].textContent = "İptal ediliyor…";
+  try {
+    await fetchJson(`/api/jobs/${activeJobId}/cancel`, { method: "POST" }, 10000);
+    await pollJob();
+  } catch (error) {
+    elements["cancel-button"].disabled = false;
+    elements["cancel-button"].textContent = "Sorguyu durdur";
+    showError(error.message);
+  }
+});
 document.querySelectorAll('.mode input').forEach((input) => input.addEventListener("change", () => document.querySelectorAll(".mode").forEach((label) => label.classList.toggle("selected", label.contains(document.querySelector('input[name="mode"]:checked'))))));
 elements["portal-groups"].addEventListener("change", (event) => {
   if (event.target.matches('.portal-check input')) portalSelectionTouched = true;

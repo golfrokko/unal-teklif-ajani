@@ -225,7 +225,7 @@ async function submitOtp(req, res) {
 }
 app.post(["/api/v1/jobs/:jobId/otp/:portalId", "/api/jobs/:jobId/otp/:portalId"], submitOtp);
 
-app.post("/api/v1/jobs/:id/cancel", async (req, res, next) => {
+app.post(["/api/v1/jobs/:id/cancel", "/api/jobs/:id/cancel"], async (req, res, next) => {
   try {
     const job = store.getJob(req.params.id);
     if (!job) return res.status(404).json({ error: "Sorgu bulunamadı" });
