@@ -78,6 +78,18 @@
   cursor: not-allowed;
 }
 
+.otp-inline-error {
+  margin: 8px 0 0;
+  padding: 7px 9px;
+  border: 1px solid #f2caca;
+  border-radius: 8px;
+  background: #fff3f3;
+  color: #a33e3e;
+  font-size: 8px;
+  font-weight: 700;
+  line-height: 1.5;
+}
+
 @media (max-width: 720px) {
   .otp-inline-fields {
     align-items: stretch;

@@ -44,6 +44,7 @@ let activeJobId = null;
 let pollTimer = null;
 let announcedOtpPortals = new Set();
 const otpSubmissionState = new Map();
+const otpErrorState = new Map();
 const ACTIVE_JOB_STATUSES = new Set(["queued", "running", "cancelling"]);
 const ACTIVE_JOB_STORAGE_KEY = "unal-teklif-active-job";
 let portalRefreshTimer = null;
@@ -277,6 +278,7 @@ function renderProgress(job) {
           <form class="otp-entry otp-inline" data-portal-id="${portalId}" data-input-id="${inputId}">
             <div class="otp-inline-copy"><strong>${portalName} ${inputLabel}</strong><small>${inputCopy}</small></div>
             <div class="otp-inline-fields"><input inputmode="${waitingForOtp ? "numeric" : "text"}" autocomplete="${waitingForOtp ? "one-time-code" : "off"}" maxlength="${waitingForOtp ? 8 : 64}" placeholder="${waitingForOtp ? "SMS kodu" : inputLabel}" aria-label="${portalName} ${inputLabel}" required ${otpState ? "disabled" : ""} /><button type="submit" ${otpState ? "disabled" : ""}>${otpState === "sending" ? "Gönderiliyor…" : otpState === "sent" ? "Gönderildi" : (waitingForOtp ? "Kodu doğrula" : "Gönder")}</button></div>
+            ${otpErrorState.has(state.portalId) ? `<p class="otp-inline-error">${escapeHtml(otpErrorState.get(state.portalId))}</p>` : ""}
           </form>` : ""}
       </article>`;
   }).join("");
@@ -309,6 +311,9 @@ function renderOtp(job) {
   for (const portalId of [...otpSubmissionState.keys()]) {
     if (!waitingIds.has(portalId)) otpSubmissionState.delete(portalId);
   }
+  for (const portalId of [...otpErrorState.keys()]) {
+    if (!waitingIds.has(portalId)) otpErrorState.delete(portalId);
+  }
   const freshOtp = waiting.find((state) => !announcedOtpPortals.has(state.portalId));
   if (freshOtp) {
     announcedOtpPortals.add(freshOtp.portalId);
@@ -335,6 +340,17 @@ function renderResults(job) {
   }).join("") : `<tr><td colspan="5">Henüz fiyat teklifi alınamadı. Portal durumlarını kontrol edin.</td></tr>`;
 }
 
+function showInlineError(form, portalId, message) {
+  otpErrorState.set(portalId, message);
+  let errorEl = form.querySelector(".otp-inline-error");
+  if (!errorEl) {
+    errorEl = document.createElement("p");
+    errorEl.className = "otp-inline-error";
+    form.appendChild(errorEl);
+  }
+  errorEl.textContent = message;
+}
+
 async function submitInlineValue(event) {
   event.preventDefault();
   const form = event.currentTarget;
@@ -344,8 +360,10 @@ async function submitInlineValue(event) {
   const inputId = form.dataset.inputId || "otp";
   const isOtp = inputId === "otp";
   const value = input.value.trim();
-  if (isOtp && !/^\d{4,8}$/.test(value)) return showError("SMS kodu 4-8 rakam olmalıdır.");
-  if (!isOtp && !value) return showError("Bir değer girin.");
+  if (isOtp && !/^\d{4,8}$/.test(value)) return showInlineError(form, portalId, "SMS kodu 4-8 rakam olmalıdır.");
+  if (!isOtp && !value) return showInlineError(form, portalId, "Bir değer girin.");
+  otpErrorState.delete(portalId);
+  form.querySelector(".otp-inline-error")?.remove();
   otpSubmissionState.set(portalId, "sending");
   button.disabled = true;
   input.disabled = true;
@@ -366,7 +384,7 @@ async function submitInlineValue(event) {
     button.disabled = false;
     input.disabled = false;
     button.textContent = isOtp ? "Kodu doğrula" : "Gönder";
-    showError(error.message);
+    showInlineError(form, portalId, error.message);
   }
 }
 
