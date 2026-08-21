@@ -1,11 +1,16 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { normalizeOtp, normalizePhone, normalizeVehicle, validateJobInput } from "../src/lib/validation.mjs";
+import { normalizeEmail, normalizeOtp, normalizePhone, normalizeVehicle, validateJobInput } from "../src/lib/validation.mjs";
 
 test("telefon numarasını Türkiye mobil biçimine getirir", () => {
   assert.equal(normalizePhone("+90 545 401 29 62"), "05454012962");
   assert.equal(normalizePhone("5454012962"), "05454012962");
   assert.equal(normalizePhone("123"), "");
+});
+
+test("teklif e-postasını doğrular", () => {
+  assert.equal(normalizeEmail(" Teklif@Firma.COM "), "teklif@firma.com");
+  assert.equal(normalizeEmail("gecersiz"), "");
 });
 
 test("araç alanlarını güvenli biçimde normalize eder", () => {
