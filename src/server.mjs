@@ -9,7 +9,7 @@ import { FileStore, publicJob } from "./lib/store.mjs";
 import { normalizeOtp, normalizePhone, safeMessage, validateJobInput } from "./lib/validation.mjs";
 import { QueryEngine } from "./engine.mjs";
 
-const VERSION = "1.1.5";
+const VERSION = "1.2.0";
 const portalRegistry = new Map(portals.map((portal) => [portal.id, Object.freeze({ ...portal })]));
 const store = new FileStore({ jobsDir: paths.jobsDir, settingsFile: paths.settingsFile, retentionDays: config.retentionDays });
 const events = new JobEvents();
@@ -21,12 +21,44 @@ let portalProbes = {};
 
 function portalView(portal) {
   const setting = portalSettings[portal.id] || {};
+  const probe = portalProbes[portal.id] || null;
+  const discoveredReady = portal.adapter === "generic" && probe?.state === "form_detected";
+  const enabled = typeof setting.enabled === "boolean" ? setting.enabled : portal.defaultEnabled === true;
   return {
     ...portal,
-    enabled: typeof setting.enabled === "boolean" ? setting.enabled : portal.defaultEnabled === true,
+    enabled,
+    available: enabled || discoveredReady,
     integrationStatus: setting.integrationStatus || portal.integrationStatus || (portal.verifiedForm ? "configured_unverified" : "discovery"),
     lastVerifiedAt: setting.lastVerifiedAt || null,
     note: setting.note || "",
+    probeState: probe?.state || null,
+    probeMessage: probe?.message || "",
+    probeCheckedAt: probe?.checkedAt || null,
+  };
+}
+
+function probeSummary() {
+  return Object.values(portalProbes).reduce((summary, probe) => {
+    summary[probe.state] = (summary[probe.state] || 0) + 1;
+    return summary;
+  }, {});
+}
+
+function conciseProbe(result) {
+  const messages = {
+    form_detected: "Canlı teklif formu bulundu",
+    mapping_required: "Teklif formu eşleştirilemedi",
+    manual_required: "CAPTCHA / güvenlik doğrulaması gerekiyor",
+    access_blocked: "Portal sunucu erişimini engelledi",
+    auth_required: "Portal oturumu gerekiyor",
+    timeout: "Portal bağlantısı zaman aşımına uğradı",
+    unsupported: "Bu adaptörde canlı form teşhisi yok",
+  };
+  return {
+    state: result.state || "error",
+    message: result.message || messages[result.state] || "Portal teşhisi tamamlandı",
+    ...(result.fields ? { fields: result.fields } : {}),
+    ...(!result.fields && Array.isArray(result.controls) ? { fields: { controlCount: result.controls.length, labelCount: result.labels?.length || 0 } } : {}),
   };
 }
 
@@ -99,6 +131,7 @@ app.get("/health", (req, res) => res.json({
   queue: queue.stats,
   browser: { state: browserManager.state, activeContexts: browserManager.activeContextCount },
   portalProbes,
+  probeSummary: probeSummary(),
   lastRuntimeError: lastRuntimeError || engine.lastError || browserManager.lastError,
   panelAuthConfigured: Boolean(config.panelUser && config.panelPassword),
 }));
@@ -112,7 +145,11 @@ app.get(["/api/v1/system", "/api/system"], (req, res) => res.json({
   safety: { captchaBypass: false, smsBypass: false, authorizedUseOnly: true },
 }));
 
-app.get(["/api/v1/portals", "/api/portals"], (req, res) => res.json({ portals: portals.map(portalView), maxConcurrency: config.maxConcurrency }));
+app.get(["/api/v1/portals", "/api/portals"], (req, res) => res.json({
+  portals: portals.map(portalView),
+  maxConcurrency: config.maxConcurrency,
+  probeSummary: probeSummary(),
+}));
 app.patch("/api/v1/portals/:id", async (req, res, next) => {
   try {
     const portal = portalRegistry.get(req.params.id);
@@ -141,8 +178,12 @@ async function createJob(req, res, next) {
   try {
     const validated = validateJobInput(req.body, config.defaultPhone);
     if (validated.error) return res.status(400).json({ error: validated.error });
-    const requested = Array.isArray(req.body?.portalIds) ? new Set(req.body.portalIds) : new Set(portals.map((portal) => portal.id));
-    const selected = portals.filter((portal) => requested.has(portal.id) && portalView(portal).enabled);
+    const hasExplicitSelection = Array.isArray(req.body?.portalIds);
+    const requested = hasExplicitSelection ? new Set(req.body.portalIds) : new Set(portals.filter((portal) => portalView(portal).enabled).map((portal) => portal.id));
+    const selected = portals.filter((portal) => {
+      const view = portalView(portal);
+      return requested.has(portal.id) && (view.enabled || (hasExplicitSelection && view.available));
+    });
     if (!selected.length) return res.status(400).json({ error: "Etkin en az bir portal seçilmelidir" });
     if (selected.some((portal) => ["ihsan", "ihsan-frame"].includes(portal.adapter))) {
       if (!validated.value.vehicle.registration) return res.status(400).json({ error: "İhsan altyapılı sorgular için ruhsat seri numarası zorunludur" });
@@ -203,7 +244,13 @@ app.get("/api/v1/jobs/:id/events", (req, res) => {
   req.on("close", () => { clearInterval(heartbeat); unsubscribe(); });
 });
 
-app.use(express.static(paths.publicDir, { index: "index.html", maxAge: "5m" }));
+app.use(express.static(paths.publicDir, {
+  index: "index.html",
+  maxAge: 0,
+  setHeaders: (res, filePath) => {
+    if (/\.(?:html|js|css)$/i.test(filePath)) res.setHeader("Cache-Control", "no-cache, must-revalidate");
+  },
+}));
 app.use((req, res) => {
   if (req.path.startsWith("/api/")) return res.status(404).json({ error: "API yolu bulunamadı" });
   res.sendFile(`${paths.publicDir}/index.html`);
@@ -221,19 +268,26 @@ const server = app.listen(config.port, "0.0.0.0", () => {
 });
 
 async function probeConfiguredPortals() {
-  const targets = portals.filter((portal) => portal.defaultEnabled && ["ihsan", "ihsan-frame"].includes(portal.adapter));
-  for (const portal of targets) {
-    portalProbes = { ...portalProbes, [portal.id]: { state: "running", checkedAt: new Date().toISOString() } };
-    try {
-      const result = await engine.probePortal(portal);
-      portalProbes = { ...portalProbes, [portal.id]: { ...result, checkedAt: new Date().toISOString() } };
-      console.log(`[probe:${portal.id}] ${result.state}`);
-    } catch (error) {
-      const message = safeMessage(error, 240);
-      portalProbes = { ...portalProbes, [portal.id]: { state: "error", message, checkedAt: new Date().toISOString() } };
-      console.warn(`[probe:${portal.id}] ${message}`);
+  const targets = [...portals];
+  let nextIndex = 0;
+  const workers = Array.from({ length: Math.min(config.maxConcurrency, targets.length) }, async () => {
+    while (nextIndex < targets.length) {
+      const portal = targets[nextIndex];
+      nextIndex += 1;
+      portalProbes = { ...portalProbes, [portal.id]: { state: "running", message: "Canlı bağlantı test ediliyor", checkedAt: new Date().toISOString() } };
+      try {
+        const result = conciseProbe(await engine.probePortal(portal, { navigationTimeoutMs: Math.min(config.navigationTimeoutMs, 20000) }));
+        portalProbes = { ...portalProbes, [portal.id]: { ...result, checkedAt: new Date().toISOString() } };
+        console.log(`[probe:${portal.id}] ${result.state}`);
+      } catch (error) {
+        const message = safeMessage(error, 240);
+        const state = /Timeout/i.test(message) ? "timeout" : "error";
+        portalProbes = { ...portalProbes, [portal.id]: { state, message, checkedAt: new Date().toISOString() } };
+        console.warn(`[probe:${portal.id}] ${message}`);
+      }
     }
-  }
+  });
+  await Promise.all(workers);
 }
 setTimeout(() => probeConfiguredPortals().catch((error) => {
   lastRuntimeError = `Portal teşhisi: ${safeMessage(error, 240)}`;
