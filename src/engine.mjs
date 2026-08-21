@@ -28,8 +28,26 @@ function isRetryable(error) {
   return /Timeout|ERR_CONNECTION|ERR_NETWORK|ECONNRESET|ENETUNREACH|EAI_AGAIN|Target page.*closed/i.test(safeMessage(error));
 }
 
+class SmsGate {
+  constructor(cooldownMs) {
+    this.cooldownMs = cooldownMs;
+    this.chain = Promise.resolve(0);
+  }
+
+  acquire() {
+    const next = this.chain.then(async (lastAt) => {
+      const wait = lastAt + this.cooldownMs - Date.now();
+      if (wait > 0) await delay(wait);
+      return Date.now();
+    });
+    this.chain = next;
+    return next.then(() => {});
+  }
+}
+
 export class QueryEngine {
   #inputWaiters = new Map();
+  #ihsanSmsGate;
 
   constructor({ store, events, browserManager, portalRegistry, config, paths }) {
     this.store = store;
@@ -39,6 +57,7 @@ export class QueryEngine {
     this.config = config;
     this.paths = paths;
     this.lastError = null;
+    this.#ihsanSmsGate = new SmsGate(config.ihsanSmsCooldownMs ?? 65000);
   }
 
   async executeJob(jobId) {
@@ -170,6 +189,9 @@ export class QueryEngine {
               message: `"${label}" bilgisi panelden bekleniyor`,
               extra: { inputLabel: label, ...(choices?.length ? { inputChoices: choices } : {}) },
             }),
+            requestSmsSlot: (portal.adapter === "ihsan" || portal.adapter === "ihsan-frame")
+              ? () => this.#ihsanSmsGate.acquire()
+              : undefined,
           });
           if (result.status && FAILURE_PORTAL_STATES.has(result.status)) {
             result.screenshotPath = await this.#captureScreenshot(page, job.id, portal.id);

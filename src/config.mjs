@@ -23,6 +23,7 @@ export const config = Object.freeze({
   otpTimeoutMs: boundedNumber(process.env.OTP_TIMEOUT_MS, 300000, 60000, 600000),
   approvalTimeoutMs: boundedNumber(process.env.APPROVAL_TIMEOUT_MS, 600000, 60000, 1800000),
   historyLookupDelayMs: boundedNumber(process.env.HISTORY_LOOKUP_DELAY_MS, 60000, 0, 180000),
+  ihsanSmsCooldownMs: boundedNumber(process.env.IHSAN_SMS_COOLDOWN_MS, 65000, 0, 180000),
   retryCount: boundedNumber(process.env.PORTAL_RETRY_COUNT, 1, 0, 2),
   retentionDays: boundedNumber(process.env.JOB_RETENTION_DAYS, 30, 1, 365),
   headless: process.env.HEADLESS !== "false",

@@ -5,13 +5,25 @@ function escapeRegex(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+export async function fillHumanLike(input, value) {
+  await input.click({ timeout: 3000, clickCount: 3 }).catch(() => {});
+  await input.fill("", { timeout: 2000 }).catch(() => {});
+  await input.pressSequentially(String(value), { timeout: 8000, delay: 28 }).catch(async () => {
+    await input.fill(String(value), { timeout: 3000 }).catch(() => {});
+  });
+  const actual = await input.inputValue({ timeout: 1000 }).catch(() => "");
+  if (actual.replace(/\s+/g, "") !== String(value).replace(/\s+/g, "")) {
+    await input.fill(String(value), { timeout: 3000 }).catch(() => {});
+  }
+}
+
 export async function fillFirst(target, value, selectors, labelTerms) {
   if (!value) return false;
   for (const selector of selectors) {
     try {
       const input = target.locator(selector).first();
       if (await input.isVisible({ timeout: 400 })) {
-        await input.fill(value, { timeout: 3000 });
+        await fillHumanLike(input, value);
         return true;
       }
     } catch {}
@@ -20,7 +32,7 @@ export async function fillFirst(target, value, selectors, labelTerms) {
     try {
       const input = target.getByLabel(new RegExp(escapeRegex(term), "i")).first();
       if (await input.isVisible({ timeout: 400 })) {
-        await input.fill(value, { timeout: 3000 });
+        await fillHumanLike(input, value);
         return true;
       }
     } catch {}
@@ -31,12 +43,13 @@ export async function fillFirst(target, value, selectors, labelTerms) {
       if (!(await label.isVisible({ timeout: 400 }))) continue;
       const inside = label.locator("input").first();
       if (await inside.count()) {
-        await inside.fill(value, { timeout: 3000 });
+        await fillHumanLike(inside, value);
         return true;
       }
       const forId = await label.getAttribute("for");
       if (forId) {
-        await target.locator(`[id="${forId.replace(/(["\\])/g, "\\$1")}"]`).first().fill(value, { timeout: 3000 });
+        const linked = target.locator(`[id="${forId.replace(/(["\\])/g, "\\$1")}"]`).first();
+        await fillHumanLike(linked, value);
         return true;
       }
     } catch {}
@@ -44,16 +57,141 @@ export async function fillFirst(target, value, selectors, labelTerms) {
   return false;
 }
 
+export function splitFullName(fullName) {
+  const parts = String(fullName || "").trim().split(/\s+/).filter(Boolean);
+  if (!parts.length) return { first: "", last: "" };
+  if (parts.length === 1) return { first: parts[0], last: "" };
+  return { first: parts.slice(0, -1).join(" "), last: parts.at(-1) };
+}
+
+export async function fillNameAndEmail(target, job) {
+  const fullName = job.vehicle?.fullName || "";
+  const { first, last } = splitFullName(fullName);
+  const filledFullName = await fillFirst(target, fullName,
+    ['input[name*="fullname" i]', 'input[name*="ad_soyad" i]', 'input[name*="adsoyad" i]', 'input[name*="namesurname" i]', 'input[placeholder*="ad soyad" i]', 'input[placeholder*="adınız soyadınız" i]'],
+    ["Ad Soyad", "Ad ve Soyad", "Adı Soyadı", "Adınız Soyadınız", "Sigortalı Adı Soyadı"]);
+  let filledFirst = false;
+  let filledLast = false;
+  if (!filledFullName && first && last) {
+    filledFirst = await fillFirst(target, first,
+      ['input[name*="firstname" i]', 'input[name="ad" i]', 'input[id="ad" i]', 'input[placeholder="Adınız" i]', 'input[placeholder="Adı" i]'],
+      ["Adınız", "İsminiz"]);
+    filledLast = await fillFirst(target, last,
+      ['input[name*="lastname" i]', 'input[name*="soyad" i]', 'input[id*="soyad" i]', 'input[placeholder*="soyadınız" i]'],
+      ["Soyadınız", "Soyadı"]);
+  }
+  const filledEmail = await fillFirst(target, job.email,
+    ['input[type="email"]', 'input[name*="email" i]', 'input[name*="eposta" i]', 'input[name*="e_posta" i]', 'input[placeholder*="e-posta" i]', 'input[placeholder*="eposta" i]'],
+    ["E-posta", "E-Posta Adresi", "Eposta", "Email"]);
+  return { fullName: filledFullName || (filledFirst && filledLast), email: filledEmail };
+}
+
+function convertDateFormat(ddmmyyyy, targetFormat) {
+  const match = String(ddmmyyyy || "").match(/^(\d{1,2})[.\/-](\d{1,2})[.\/-](\d{4})$/);
+  if (!match) return ddmmyyyy;
+  const [, dd, mm, yyyy] = match;
+  const pad = (part) => part.padStart(2, "0");
+  if (targetFormat === "mm/dd/yyyy") return `${pad(mm)}/${pad(dd)}/${yyyy}`;
+  if (targetFormat === "yyyy-mm-dd") return `${yyyy}-${pad(mm)}-${pad(dd)}`;
+  return `${pad(dd)}.${pad(mm)}.${yyyy}`;
+}
+
+export async function fillBirthDate(target, birthDate) {
+  if (!birthDate) return false;
+  const selectors = [
+    'input[placeholder="GG.AA.YYYY" i]', 'input[placeholder="DD.MM.YYYY" i]', 'input[placeholder="MM/DD/YYYY" i]',
+    'input[placeholder="DD/MM/YYYY" i]', 'input[type="date"]', 'input[name*="birth" i]', 'input[name*="dogum" i]',
+    'input[id*="birth" i]', 'input[id*="dogum" i]',
+  ];
+  for (const selector of selectors) {
+    try {
+      const input = target.locator(selector).first();
+      if (!(await input.isVisible({ timeout: 400 }))) continue;
+      const meta = await input.evaluate((element) => ({
+        placeholder: element.getAttribute("placeholder") || "",
+        type: element.getAttribute("type") || "",
+      })).catch(() => ({}));
+      let value = birthDate;
+      if (meta.type === "date") value = convertDateFormat(birthDate, "yyyy-mm-dd");
+      else if (/^mm/i.test(meta.placeholder)) value = convertDateFormat(birthDate, "mm/dd/yyyy");
+      await fillHumanLike(input, value);
+      return true;
+    } catch {}
+  }
+  return fillFirst(target, birthDate, [], ["Doğum Tarihi"]);
+}
+
+function splitRegistrationParts(registration) {
+  const match = String(registration || "").match(/^([A-ZÇĞİÖŞÜ]+)(\d+)$/);
+  if (!match) return { seri: registration, no: registration };
+  return { seri: match[1], no: match[2] };
+}
+
+export async function fillMatbuVehicleFields(target, vehicle) {
+  const filled = {};
+  const vehicleText = String(vehicle.vehicle || "").trim();
+  const words = vehicleText.split(/\s+/).filter(Boolean);
+  const brand = words[0] || "";
+  const model = words.slice(1).join(" ") || vehicleText;
+  filled.brand = await fillFirst(target, brand,
+    ['select[name*="brand" i]', 'select[name*="marka" i]', 'input[name*="brand" i]', 'input[name*="marka" i]'],
+    ["Araç Markası", "Marka"]);
+  filled.model = await fillFirst(target, model,
+    ['select[name*="model" i]:not([name*="yil" i])', 'input[name*="model" i]:not([name*="yil" i])'],
+    ["Araç Modeli", "Model"]);
+  filled.year = await fillFirst(target, vehicle.year,
+    ['select[name*="year" i]', 'select[name*="modelyil" i]', 'select[name*="model_yil" i]', 'input[name*="year" i]', 'input[name*="modelyil" i]'],
+    ["Model Yılı", "Araç Model Yılı"]);
+  return filled;
+}
+
+export async function fillSecondaryRegistrationFields(target, registration) {
+  const { no } = splitRegistrationParts(registration);
+  return fillFirst(target, no,
+    ['input[name*="belgeno" i]', 'input[name*="belge_no" i]', 'input[id*="belgeno" i]', 'input[placeholder*="belge no" i]'],
+    ["Ruhsat Belge No", "Belge No", "Tescil No", "Tescil Belge No"]);
+}
+
+const CONSENT_TEXT_PATTERN = /(KVKK|AYDINLATMA|KULLANICI SÖZLEŞMESİ|ÜYELİK SÖZLEŞMESİ|GİZLİLİK SÖZLEŞMESİ|KİŞİSEL VERİ|AÇIK RIZA|ELEKTRONİK İLETİ|ONAY VERİYORUM|KABUL EDİYORUM|ŞARTLARI KABUL)/;
+
 export async function acceptRequiredConsents(target) {
   const labels = target.locator("label");
-  const count = Math.min(await labels.count(), 140);
-  for (let index = 0; index < count; index += 1) {
+  const labelCount = Math.min(await labels.count().catch(() => 0), 140);
+  for (let index = 0; index < labelCount; index += 1) {
     const label = labels.nth(index);
     const text = (await label.innerText({ timeout: 300 }).catch(() => "")).toLocaleUpperCase("tr-TR");
-    if (!/(KVKK|AYDINLATMA|KULLANICI SÖZLEŞMESİ|GİZLİLİK SÖZLEŞMESİ|KİŞİSEL VERİ)/.test(text)) continue;
+    if (!CONSENT_TEXT_PATTERN.test(text)) continue;
     const input = label.locator('input[type="checkbox"]').first();
-    if (await input.count()) await input.check({ force: true }).catch(() => {});
+    if (await input.count()) {
+      if (!await input.isChecked({ timeout: 300 }).catch(() => false)) {
+        await input.check({ force: true }).catch(() => {});
+        if (!await input.isChecked({ timeout: 300 }).catch(() => false)) await label.click({ force: true }).catch(() => {});
+      }
+      continue;
+    }
+    const forId = await label.getAttribute("for");
+    if (forId) {
+      const linked = target.locator(`[id="${forId.replace(/(["\\])/g, "\\$1")}"]`).first();
+      if (await linked.count() && !await linked.isChecked({ timeout: 300 }).catch(() => false)) {
+        await linked.check({ force: true }).catch(() => {});
+      }
+    }
   }
+  const boxes = target.locator('input[type="checkbox"]');
+  const boxCount = Math.min(await boxes.count().catch(() => 0), 60);
+  for (let index = 0; index < boxCount; index += 1) {
+    const box = boxes.nth(index);
+    if (!await box.isVisible({ timeout: 200 }).catch(() => false)) continue;
+    if (await box.isChecked({ timeout: 200 }).catch(() => false)) continue;
+    const nearbyText = await box.evaluate((element) => (element.closest("label, .form-check, .checkbox, li, div")?.innerText || "")
+      .toLocaleUpperCase("tr-TR")).catch(() => "");
+    if (CONSENT_TEXT_PATTERN.test(nearbyText)) await box.check({ force: true }).catch(() => {});
+  }
+}
+
+export async function humanPause(minMs = 180, maxMs = 420) {
+  const ms = minMs + Math.floor(Math.random() * (maxMs - minMs));
+  await new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 export async function resolveTarget(page, portal) {
@@ -62,42 +200,61 @@ export async function resolveTarget(page, portal) {
   return page.frames().find((frame) => frame !== page.mainFrame() && /sigorta\.online/i.test(frame.url())) || page;
 }
 
+const PHONE_SELECTORS = [
+  'input[name*="phone" i]', 'input[name*="telefon" i]', 'input[name*="gsm" i]', 'input[name*="cep" i]',
+  'input[id*="phone" i]', 'input[id*="telefon" i]', 'input[id*="gsm" i]', 'input[id*="cep" i]',
+  'input[placeholder*="telefon" i]', 'input[placeholder*="gsm" i]', 'input[placeholder*="cep" i]', 'input[placeholder*="5__" i]',
+  'input[type="tel"]:not([name*="kimlik" i]):not([id*="kimlik" i]):not([name*="identity" i]):not([id*="identity" i]):not([name*="tc" i]):not([id*="tc" i])',
+];
+const PHONE_LABELS = ["GSM", "Cep Telefonu", "Telefon"];
+
 export async function fillQuoteForm(target, job) {
   const vehicle = job.vehicle;
   const phone10 = job.phone.replace(/^0/, "");
-  const filled = {
-    identity: await fillFirst(target, vehicle.identity,
-      ['input[name*="identity" i]', 'input[name*="kimlik" i]', 'input[name*="tc" i]', 'input[placeholder*="TC" i]', 'input[placeholder*="kimlik" i]'],
-      ["Kimlik Numarası", "TC Kimlik No", "TC/Vergi", "T.C. Kimlik"]),
-    birthDate: await fillFirst(target, vehicle.birthDate,
-      ['input[name*="birth" i]', 'input[name*="dogum" i]', 'input[placeholder*="GG.AA.YYYY" i]'], ["Doğum Tarihi"]),
-    plate: await fillFirst(target, vehicle.plate,
-      ['input[name*="plate" i]', 'input[name*="plaka" i]', 'input[placeholder*="plaka" i]'], ["Plaka"]),
-    registration: await fillFirst(target, vehicle.registration,
-      ['input[name*="registration" i]', 'input[name*="ruhsat" i]', 'input[name*="belge" i]', 'input[placeholder*="ruhsat" i]'],
-      ["Ruhsat Numarası", "Ruhsat Seri", "Belge Seri"]),
-    phone: await fillFirst(target, phone10,
-      [
-        'input[name*="phone" i]', 'input[name*="telefon" i]', 'input[name*="gsm" i]', 'input[name*="cep" i]',
-        'input[id*="phone" i]', 'input[id*="telefon" i]', 'input[id*="gsm" i]', 'input[id*="cep" i]',
-        'input[placeholder*="telefon" i]', 'input[placeholder*="gsm" i]', 'input[placeholder*="cep" i]', 'input[placeholder*="5__" i]',
-        'input[type="tel"]:not([name*="kimlik" i]):not([id*="kimlik" i]):not([name*="identity" i]):not([id*="identity" i]):not([name*="tc" i]):not([id*="tc" i])',
-      ],
-      ["GSM", "Cep Telefonu", "Telefon"]),
-    chassis: await fillFirst(target, vehicle.chassis,
-      ['input[name*="chassis" i]', 'input[name*="sasi" i]'], ["Şasi Numarası", "Şasi No"]),
-    engine: await fillFirst(target, vehicle.engine,
-      ['input[name*="engine" i]', 'input[name*="motor" i]'], ["Motor Numarası", "Motor No"]),
-  };
+  const filled = {};
+  filled.identity = await fillFirst(target, vehicle.identity,
+    ['input[name*="identity" i]', 'input[name*="kimlik" i]', 'input[name*="tc" i]', 'input[placeholder*="TC" i]', 'input[placeholder*="kimlik" i]'],
+    ["Kimlik Numarası", "TC Kimlik No", "TC/Vergi", "T.C. Kimlik", "TC Kimlik Numarası", "Vergi Kimlik No"]);
+  await humanPause();
+  filled.birthDate = await fillBirthDate(target, vehicle.birthDate);
+  await humanPause();
+  filled.plate = await fillFirst(target, vehicle.plate,
+    ['input[name*="plate" i]', 'input[name*="plaka" i]', 'input[placeholder*="plaka" i]'], ["Plaka"]);
+  await humanPause();
+  filled.registration = await fillFirst(target, vehicle.registration,
+    ['input[name*="registration" i]', 'input[name*="ruhsat" i]', 'input[name*="belge" i]', 'input[name*="tescil" i]', 'input[placeholder*="ruhsat" i]'],
+    ["Ruhsat Numarası", "Ruhsat Seri", "Belge Seri", "Ruhsat Tescil Belge Seri No", "Tescil Belge Seri No", "Ruhsat Seri No"]);
+  await fillSecondaryRegistrationFields(target, vehicle.registration);
+  await humanPause();
+  filled.phone = (await fillFirst(target, phone10, PHONE_SELECTORS, PHONE_LABELS)) || (await fillFirst(target, job.phone, PHONE_SELECTORS, PHONE_LABELS));
+  await humanPause();
+  filled.chassis = await fillFirst(target, vehicle.chassis,
+    ['input[name*="chassis" i]', 'input[name*="sasi" i]'], ["Şasi Numarası", "Şasi No"]);
+  filled.engine = await fillFirst(target, vehicle.engine,
+    ['input[name*="engine" i]', 'input[name*="motor" i]'], ["Motor Numarası", "Motor No"]);
+  await humanPause();
+  await fillMatbuVehicleFields(target, vehicle);
+  await humanPause();
+  await fillNameAndEmail(target, job);
   await acceptRequiredConsents(target);
   return filled;
+}
+
+async function waitUntilEnabled(locator, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await locator.isEnabled({ timeout: 300 }).catch(() => false)) return true;
+    await locator.page().waitForTimeout(300);
+  }
+  return false;
 }
 
 export async function clickSubmit(target) {
   for (const name of [/Gönder/i, /Teklif(?:i)? Al/i, /Sorgula/i, /Devam/i, /Hemen Teklif/i, /Doğrula/i, /Onayla/i, /Fiyat(?:ları)? (?:Gör|Getir|Hesapla)/i, /Karşılaştır/i, /Teklifleri Görüntüle/i, /Devam Et/i, /İleri/i, /Hesapla/i]) {
     try {
       const button = target.getByRole("button", { name }).first();
-      if (await button.isVisible({ timeout: 500 }) && await button.isEnabled({ timeout: 500 })) {
+      if (!await button.isVisible({ timeout: 500 })) continue;
+      if (await button.isEnabled({ timeout: 500 }) || await waitUntilEnabled(button, 2500)) {
         await button.click({ timeout: 5000 });
         return true;
       }
@@ -106,7 +263,8 @@ export async function clickSubmit(target) {
   for (const selector of ['button[type="submit"]', 'input[type="submit"]']) {
     try {
       const button = target.locator(selector).first();
-      if (await button.isVisible({ timeout: 500 }) && await button.isEnabled({ timeout: 500 })) {
+      if (!await button.isVisible({ timeout: 500 })) continue;
+      if (await button.isEnabled({ timeout: 500 }) || await waitUntilEnabled(button, 2500)) {
         await button.click({ timeout: 5000 });
         return true;
       }
@@ -238,18 +396,23 @@ async function quoteFormProfile(target) {
 }
 
 async function openQuoteFlow(target, page) {
-  const before = await quoteFormProfile(target);
-  if ((before.hasIdentity || before.hasPlate || before.hasRegistration) && before.hasSubmit) return before;
-  const opened = await clickNamedButton(target, [
-    /Trafik Sigortası Teklif/i,
-    /Trafik Teklifi/i,
-    /Teklif Al/i,
-    /Hemen Teklif/i,
-    /Fiyat Al/i,
-  ]);
-  if (!opened) return before;
-  await page.waitForTimeout(1000);
-  return quoteFormProfile(target);
+  let profile = await quoteFormProfile(target);
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    if ((profile.hasIdentity || profile.hasPlate || profile.hasRegistration) && profile.hasSubmit) return profile;
+    const dismissed = await clickNamedButton(target, [/Şimdi Değil/i, /Vazgeç/i, /Daha Sonra/i, /Atla/i, /Kapat/i]);
+    const opened = dismissed || await clickNamedButton(target, [
+      /Trafik Sigortası Teklif/i,
+      /Trafik Teklifi/i,
+      /Teklif Al/i,
+      /Hemen Teklif/i,
+      /Fiyat Al/i,
+      /Sorgula/i,
+    ]);
+    if (!opened) return profile;
+    await page.waitForTimeout(1000);
+    profile = await quoteFormProfile(target);
+  }
+  return profile;
 }
 
 export function pageState(text) {

@@ -10,6 +10,16 @@ test("metinden gerçek şirket ve TRY fiyatlarını çıkarır", () => {
   assert.equal(offers.find((offer) => offer.company === "MAPFRE SİGORTA").price, 12450.75);
 });
 
+test("komşu şirketlerin fiyatları birbirine karışmaz (Dijipol tipi tablo)", () => {
+  const offers = extractOffersFromText(
+    "HDI SİGORTA 950,00 TL ANADOLU SİGORTA 1.200,00 TL AXA SİGORTA 800,00 TL",
+    portal,
+  );
+  assert.equal(offers.find((offer) => offer.company === "HDI SİGORTA").price, 950);
+  assert.equal(offers.find((offer) => offer.company === "ANADOLU SİGORTA").price, 1200);
+  assert.equal(offers.find((offer) => offer.company === "AXA SİGORTA").price, 800);
+});
+
 test("aynı portal fiyatını tekilleştirip en iyi teklifi özetler", () => {
   const input = [
     { company: "ALLIANZ", price: 10000, sourcePortalId: "a" },

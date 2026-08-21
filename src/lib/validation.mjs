@@ -14,6 +14,7 @@ export function normalizeEmail(value) {
 
 export function normalizeVehicle(input = {}) {
   return {
+    fullName: String(input.fullName || "").replace(/\s+/g, " ").trim().slice(0, 80),
     identity: String(input.identity || "").replace(/\D/g, "").slice(0, 11),
     birthDate: String(input.birthDate || "").trim().slice(0, 10),
     plate: String(input.plate || "").replace(/\s+/g, " ").trim().toLocaleUpperCase("tr-TR").slice(0, 12),

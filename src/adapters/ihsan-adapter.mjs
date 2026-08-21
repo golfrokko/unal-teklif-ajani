@@ -5,9 +5,13 @@ import {
   clickNamedButton,
   clickSubmit,
   detectCaptcha,
+  fillBirthDate,
   fillFirst,
+  fillNameAndEmail,
   fillOtpCode,
+  fillSecondaryRegistrationFields,
   findOtpInput,
+  humanPause,
   pageState,
   resolveTarget,
   visibleText,
@@ -136,18 +140,22 @@ function vehicleCandidates(vehicleText) {
 
 async function fillIhsanFields(target, job, { includeDynamic = false, page = null } = {}) {
   const vehicle = job.vehicle;
-  const filled = {
-    identity: await fillFirst(target, vehicle.identity,
-      ['input[placeholder*="kimlik numaranızı" i]', 'input[name*="identity" i]', 'input[name*="kimlik" i]', 'input[name*="tc" i]'],
-      ["Kimlik Numarası", "TC Kimlik No", "TC/Vergi"]),
-    birthDate: await fillFirst(target, vehicle.birthDate,
-      ['input[placeholder="GG.AA.YYYY"]', 'input[name*="birth" i]', 'input[name*="dogum" i]'], ["Doğum Tarihi"]),
-    plate: await fillFirst(target, vehicle.plate,
-      ['input[placeholder*="34 ABC" i]', 'input[name*="plate" i]', 'input[name*="plaka" i]'], ["Plaka"]),
-    registration: await fillFirst(target, vehicle.registration,
-      ['input[placeholder*="Ruhsat numaranızı" i]', 'input[name*="registration" i]', 'input[name*="ruhsat" i]', 'input[name*="belge" i]'],
-      ["Ruhsat Numarası", "Ruhsat Seri", "Belge Seri"]),
-  };
+  const filled = {};
+  filled.identity = await fillFirst(target, vehicle.identity,
+    ['input[placeholder*="kimlik numaranızı" i]', 'input[name*="identity" i]', 'input[name*="kimlik" i]', 'input[name*="tc" i]'],
+    ["Kimlik Numarası", "TC Kimlik No", "TC/Vergi", "TC Kimlik Numarası", "Vergi Kimlik No"]);
+  await humanPause();
+  filled.birthDate = await fillBirthDate(target, vehicle.birthDate);
+  await humanPause();
+  filled.plate = await fillFirst(target, vehicle.plate,
+    ['input[placeholder*="34 ABC" i]', 'input[name*="plate" i]', 'input[name*="plaka" i]'], ["Plaka"]);
+  await humanPause();
+  filled.registration = await fillFirst(target, vehicle.registration,
+    ['input[placeholder*="Ruhsat numaranızı" i]', 'input[name*="registration" i]', 'input[name*="ruhsat" i]', 'input[name*="belge" i]', 'input[name*="tescil" i]'],
+    ["Ruhsat Numarası", "Ruhsat Seri", "Belge Seri", "Ruhsat Tescil Belge Seri No", "Tescil Belge Seri No", "Ruhsat Seri No"]);
+  await fillSecondaryRegistrationFields(target, vehicle.registration);
+  await humanPause();
+  await fillNameAndEmail(target, job);
 
   if (includeDynamic) {
     filled.vehicleType = await selectLabeled(target, {
@@ -178,6 +186,23 @@ async function fillIhsanFields(target, job, { includeDynamic = false, page = nul
   }
   await acceptRequiredConsents(target);
   return filled;
+}
+
+async function hasIdentityOrPlateField(target) {
+  const identityVisible = await target.locator('input[name*="kimlik" i], input[name*="identity" i], input[name*="tc" i], input[placeholder*="kimlik" i]').first().isVisible({ timeout: 400 }).catch(() => false);
+  if (identityVisible) return true;
+  return target.locator('input[name*="plaka" i], input[name*="plate" i], input[placeholder*="plaka" i]').first().isVisible({ timeout: 400 }).catch(() => false);
+}
+
+async function escapeNonQueryScreens(target, page) {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    if (await hasIdentityOrPlateField(target)) return true;
+    const dismissed = await clickNamedButton(target, [/Şimdi Değil/i, /Vazgeç/i, /Daha Sonra/i, /Atla/i, /Kapat/i])
+      || await clickNamedButton(target, [/Trafik Sigortası Teklif/i, /Trafik Teklifi/i, /Hemen Teklif Al/i, /Teklif Al/i, /Sorgula/i]);
+    if (!dismissed) return false;
+    await page.waitForTimeout(900);
+  }
+  return hasIdentityOrPlateField(target);
 }
 
 async function pageProfile(target, page) {
@@ -258,7 +283,7 @@ async function latestSessionTarget(page, target, portal) {
   return resolveTarget(latest, portal);
 }
 
-async function completeSessionLogin({ page, target, job, portal, requestOtp, setState, openIfNeeded = true }) {
+async function completeSessionLogin({ page, target, job, portal, requestOtp, setState, requestSmsSlot, openIfNeeded = true }) {
   if (portal.smsPolicy !== "session_once" || job.mode !== "ask_sms") return null;
   let loginTarget = await sessionDialogTarget(target);
   let otpInput = await findOtpInput(loginTarget);
@@ -316,6 +341,10 @@ async function completeSessionLogin({ page, target, job, portal, requestOtp, set
         diagnostics: await pageProfile(loginTarget, page),
       };
     }
+    if (requestSmsSlot) {
+      await setState("opening", `${portal.name} için SMS gönderim sırası bekleniyor (paylaşılan altyapı hız sınırı)`);
+      await requestSmsSlot();
+    }
     const sent = await clickNamedButton(loginTarget, [/Kod(?:u)? Gönder/i, /SMS Gönder/i, /Devam/i, /^Giriş Yap$/i]);
     if (!sent) {
       return { status: "mapping_required", message: `${portal.name} SMS gönderme düğmesi eşleştirilemedi`, diagnostics: await pageProfile(loginTarget, page) };
@@ -337,6 +366,7 @@ async function completeSessionLogin({ page, target, job, portal, requestOtp, set
 
   let code = pendingCode ? await pendingCode : await requestOtp();
   while (code === RESEND_SENTINEL) {
+    if (requestSmsSlot) await requestSmsSlot();
     const resent = await clickNamedButton(loginTarget, [/Tekrar Gönder/i, /Yeniden Gönder/i, /Kod(?:u)? Gönder/i, /SMS Gönder/i]);
     if (!resent) {
       return { status: "mapping_required", message: `${portal.name} kodu tekrar gönderme düğmesi bulunamadı`, diagnostics: await pageProfile(loginTarget, page) };
@@ -396,7 +426,7 @@ async function lookupOfferFromHistory({ page, target, job, portal }) {
   return offers.length ? offers : null;
 }
 
-async function waitForIhsanOutcome({ page, target, job, portal, resultTimeoutMs, historyLookupDelayMs, requestOtp, requestField, setState, isCancelled }) {
+async function waitForIhsanOutcome({ page, target, job, portal, resultTimeoutMs, historyLookupDelayMs, requestOtp, requestField, requestSmsSlot, setState, isCancelled }) {
   const startedAt = Date.now();
   let dynamicAttempted = false;
   let lastOffers = [];
@@ -414,7 +444,7 @@ async function waitForIhsanOutcome({ page, target, job, portal, resultTimeoutMs,
     if (await detectCaptcha(page, text)) return { status: "manual_required", message: "CAPTCHA / güvenlik kontrolü kullanıcı tarafından tamamlanmalı" };
 
     if (!sessionChallengeCompleted) {
-      const sessionOutcome = await completeSessionLogin({ page, target, job, portal, requestOtp, setState: track, openIfNeeded: true });
+      const sessionOutcome = await completeSessionLogin({ page, target, job, portal, requestOtp, requestSmsSlot, setState: track, openIfNeeded: true });
       if (sessionOutcome?.status) return sessionOutcome;
       if (sessionOutcome?.handled) {
         sessionChallengeCompleted = true;
@@ -550,7 +580,7 @@ export class IhsanPortalAdapter {
   }
 
   async run(context) {
-    const { page, portal, job, navigationTimeoutMs, resultTimeoutMs, historyLookupDelayMs, setState, requestOtp, requestField, isCancelled } = context;
+    const { page, portal, job, navigationTimeoutMs, resultTimeoutMs, historyLookupDelayMs, setState, requestOtp, requestField, requestSmsSlot, isCancelled } = context;
     const missing = missingInputMessage(job);
     if (missing) return { status: "input_required", message: missing };
     await setState("opening", "İhsan portalı açılıyor");
@@ -564,6 +594,10 @@ export class IhsanPortalAdapter {
     const target = await resolveTarget(page, portal);
     const initialState = pageState(await visibleText(target));
     if (initialState) return { status: initialState, message: initialState === "auth_required" ? "Portal oturumu açılmalı" : "Portal isteği kabul etmedi" };
+    if (!await hasIdentityOrPlateField(target)) {
+      await setState("opening", "Portal sorgu formu yerine başka bir ekranda; sorgu sayfasına geçiliyor");
+      await escapeNonQueryScreens(target, page);
+    }
     await setState("filling", "Kimlik, plaka ve ruhsat bilgileri dolduruluyor");
     const filled = await fillIhsanFields(target, job);
     const requiredFilled = filled.identity && filled.plate && filled.registration && (job.vehicle.identity.length !== 11 || filled.birthDate);
@@ -571,6 +605,6 @@ export class IhsanPortalAdapter {
     if (!await clickSubmit(target)) return { status: "mapping_required", message: "İhsan formunun Gönder düğmesi eşleştirilemedi", diagnostics: await pageProfile(target, page) };
 
     await setState("submitted", "İlk form gönderildi; portalın cevabı doğrulanıyor");
-    return waitForIhsanOutcome({ page, target, job, portal, resultTimeoutMs, historyLookupDelayMs, requestOtp, requestField, setState, isCancelled });
+    return waitForIhsanOutcome({ page, target, job, portal, resultTimeoutMs, historyLookupDelayMs, requestOtp, requestField, requestSmsSlot, setState, isCancelled });
   }
 }

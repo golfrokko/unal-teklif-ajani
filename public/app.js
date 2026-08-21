@@ -1,9 +1,11 @@
-const sampleData = `T.C. / VKN: 12345678901
+const sampleData = `Ad Soyad: Ahmet Yılmaz
+T.C. / VKN: 12345678901
 Doğum Tarihi: 12.04.1988
 Plaka: 78 SR 283
 Ruhsat Seri No: AB123456
 Araç: HYUNDAI ACCENT ERA 1.4
-Model Yılı: 2008`;
+Model Yılı: 2008
+E-posta: ahmet.yilmaz@example.com`;
 
 const statusNames = {
   queued: "Sırada",
@@ -33,9 +35,10 @@ const statusNames = {
 };
 
 const elements = Object.fromEntries([
-  "raw-data", "identity", "birth-date", "plate", "registration", "vehicle", "year", "chassis", "engine",
+  "raw-data", "full-name", "identity", "birth-date", "plate", "registration", "vehicle", "year", "chassis", "engine",
   "phone", "email", "consent", "start-button", "parse-status", "portal-groups", "progress", "progress-list",
   "progress-title", "progress-subtitle", "job-status", "cancel-button", "log", "log-list", "log-count",
+  "error-log", "error-log-list", "error-log-count",
   "results", "results-body", "result-count", "otp-dock",
   "otp-cards", "otp-count", "error-banner", "portal-count", "max-concurrency", "concurrency-stat"
 ].map((id) => [id, document.getElementById(id)]));
@@ -54,6 +57,8 @@ let jobLog = [];
 let loggedJobId = null;
 let loggedJobStatus = null;
 const loggedPortalUpdates = new Map();
+let techLog = [];
+const loggedTechPortalUpdates = new Map();
 
 function rememberActiveJob(jobId) {
   activeJobId = jobId || null;
@@ -117,6 +122,10 @@ function updateJobLog(job) {
     if (siteText) {
       appendLog(`<b>${escapeHtml(state.portalName)}</b> sitede görünen metin: <em class="log-quote">${escapeHtml(siteText.slice(0, 220))}${siteText.length > 220 ? "…" : ""}</em>`, "warn");
     }
+    if (state.status === "error" && loggedTechPortalUpdates.get(state.portalId) !== state.updatedAt) {
+      loggedTechPortalUpdates.set(state.portalId, state.updatedAt);
+      appendTechLog(`<b>${escapeHtml(state.portalName)}</b> adaptör kodu istisna fırlattı<br /><em class="log-quote">${escapeHtml(String(state.message || "").slice(0, 400))}</em>`);
+    }
   }
   if (job.status !== loggedJobStatus) {
     loggedJobStatus = job.status;
@@ -124,6 +133,33 @@ function updateJobLog(job) {
     if (jobLabels[job.status]) appendLog(jobLabels[job.status], logLevelForStatus(job.status));
   }
 }
+
+function renderTechLog() {
+  elements["error-log"].classList.toggle("hidden", techLog.length === 0);
+  elements["error-log-count"].textContent = `${techLog.length} kayıt`;
+  elements["error-log-list"].innerHTML = techLog.length
+    ? [...techLog].reverse().map((entry) => `<div class="sidebar-log-row" data-level="error"><i></i><div><time>${entry.time.toLocaleTimeString("tr-TR")}</time><p>${entry.html}</p></div></div>`).join("")
+    : `<div class="sidebar-log-empty">Teknik hata yok.</div>`;
+}
+
+function appendTechLog(html) {
+  techLog.push({ time: new Date(), html });
+  if (techLog.length > 200) techLog.shift();
+  renderTechLog();
+}
+
+function logTechError(context, error) {
+  const detail = error?.stack || error?.message || String(error);
+  appendTechLog(`<b>${escapeHtml(context)}</b><br /><em class="log-quote">${escapeHtml(detail.slice(0, 400))}</em>`);
+}
+
+window.addEventListener("error", (event) => {
+  appendTechLog(`<b>Tarayıcı hatası</b> ${escapeHtml(event.filename ? `${event.filename.split("/").pop()}:${event.lineno}:${event.colno}` : "")}<br /><em class="log-quote">${escapeHtml(String(event.message || event.error?.message || "Bilinmeyen hata").slice(0, 400))}</em>`);
+});
+
+window.addEventListener("unhandledrejection", (event) => {
+  logTechError("Yakalanmamış promise hatası", event.reason);
+});
 
 async function fetchJson(url, options = {}, timeoutMs = 15000) {
   const controller = new AbortController();
@@ -137,7 +173,9 @@ async function fetchJson(url, options = {}, timeoutMs = 15000) {
     if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`);
     return body;
   } catch (error) {
-    if (error.name === "AbortError") throw new Error("Sorgu sunucusu 15 saniye içinde yanıt vermedi.");
+    const message = error.name === "AbortError" ? "Sorgu sunucusu 15 saniye içinde yanıt vermedi." : error.message;
+    logTechError(`API isteği başarısız: ${url}`, new Error(message));
+    if (error.name === "AbortError") throw new Error(message);
     throw error;
   } finally {
     window.clearTimeout(timeout);
@@ -146,18 +184,21 @@ async function fetchJson(url, options = {}, timeoutMs = 15000) {
 
 function parseVehicleData(raw) {
   return {
+    fullName: raw.match(/(?:ad\s*soyad(?:ı)?|sigortalı(?:\s*adı\s*soyadı)?|müşteri\s*adı\s*soyadı|isim\s*soyisim|poliçe\s*sahibi)[^:\n]*:\s*([^\n\d:]{3,60})/i)?.[1]?.replace(/\s+/g, " ").trim() || "",
     identity: raw.match(/(?:t\.?c\.?|tc|vkn|vergi)[^0-9]*(\d{10,11})/i)?.[1] || "",
     birthDate: raw.match(/(?:doğum(?:\s+tarihi)?|dogum(?:\s+tarihi)?)[^0-9]*(\d{1,2}[./-]\d{1,2}[./-]\d{4})/i)?.[1] || "",
     plate: raw.match(/(?:plaka)[^A-ZÇĞİÖŞÜ0-9]*((?:0[1-9]|[1-7]\d|8[01])\s*[A-ZÇĞİÖŞÜ]{1,3}\s*\d{2,5})/i)?.[1]?.replace(/\s+/g, " ").toUpperCase() || "",
-    registration: raw.match(/(?:ruhsat(?:\s+seri(?:\s+no)?)?|belge(?:\s+seri(?:\s+no)?)?)[^A-ZÇĞİÖŞÜ0-9]*([A-ZÇĞİÖŞÜ]{1,3}\s*\d{5,8})/i)?.[1]?.replace(/\s+/g, "").toUpperCase() || "",
+    registration: raw.match(/(?:ruhsat(?:\s+tescil)?(?:\s+seri)?(?:\s+belge)?(?:\s+no(?:su)?)?|tescil(?:\s+belge)?(?:\s+seri)?(?:\s+no(?:su)?)?|belge(?:\s+seri(?:\s+no)?)?)[^A-ZÇĞİÖŞÜ0-9]*([A-ZÇĞİÖŞÜ]{1,3}\s*\d{5,8})/i)?.[1]?.replace(/\s+/g, "").toUpperCase() || "",
     vehicle: raw.match(/(?:araç|arac|marka\s*model)[^:\n]*:\s*([^\n]+)/i)?.[1]?.trim() || "",
     year: raw.match(/(?:model\s*yılı|model\s*yili|yıl|yil)[^0-9]*(19\d{2}|20\d{2})/i)?.[1] || "",
     chassis: raw.match(/(?:şasi|sasi)(?:\s+no|\s+numarası)?[^A-Z0-9]*([A-Z0-9]{8,20})/i)?.[1]?.toUpperCase() || "",
     engine: raw.match(/(?:motor)(?:\s+no|\s+numarası)?[^A-Z0-9]*([A-Z0-9]{5,20})/i)?.[1]?.toUpperCase() || "",
+    email: raw.match(/[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/i)?.[0]?.toLowerCase() || "",
   };
 }
 
 function setParsed(data) {
+  elements["full-name"].value = data.fullName || "";
   elements.identity.value = data.identity || "";
   elements["birth-date"].value = data.birthDate || "";
   elements.plate.value = data.plate || "";
@@ -166,12 +207,14 @@ function setParsed(data) {
   elements.year.value = data.year || "";
   elements.chassis.value = data.chassis || "";
   elements.engine.value = data.engine || "";
+  if (data.email) elements.email.value = data.email;
   const count = Object.values(data).filter(Boolean).length;
   elements["parse-status"].textContent = `${count} alan algılandı`;
 }
 
 function getVehicle() {
   return {
+    fullName: elements["full-name"].value,
     identity: elements.identity.value,
     birthDate: elements["birth-date"].value,
     plate: elements.plate.value,
