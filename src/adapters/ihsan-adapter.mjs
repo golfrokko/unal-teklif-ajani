@@ -114,7 +114,6 @@ function vehicleCandidates(vehicleText) {
 
 async function fillIhsanFields(target, job, { includeDynamic = false, page = null } = {}) {
   const vehicle = job.vehicle;
-  const phone10 = job.phone.replace(/^0/, "");
   const filled = {
     identity: await fillFirst(target, vehicle.identity,
       ['input[placeholder*="kimlik numaranızı" i]', 'input[name*="identity" i]', 'input[name*="kimlik" i]', 'input[name*="tc" i]'],
@@ -126,8 +125,6 @@ async function fillIhsanFields(target, job, { includeDynamic = false, page = nul
     registration: await fillFirst(target, vehicle.registration,
       ['input[placeholder*="Ruhsat numaranızı" i]', 'input[name*="registration" i]', 'input[name*="ruhsat" i]', 'input[name*="belge" i]'],
       ["Ruhsat Numarası", "Ruhsat Seri", "Belge Seri"]),
-    phone: await fillFirst(target, phone10,
-      ['input[type="tel"]', 'input[name*="phone" i]', 'input[name*="gsm" i]'], ["GSM", "Cep Telefonu", "Telefon"]),
   };
 
   if (includeDynamic) {
@@ -208,29 +205,60 @@ async function sessionTargetText(loginTarget, fallbackTarget) {
   return visibleText(fallbackTarget);
 }
 
-async function completeSessionLogin({ page, target, job, portal, requestOtp, setState }) {
+async function namedControlVisible(target, names) {
+  for (const name of names) {
+    for (const role of ["button", "link"]) {
+      if (await target.getByRole(role, { name }).first().isVisible({ timeout: 300 }).catch(() => false)) return true;
+    }
+  }
+  return false;
+}
+
+async function fillSessionPhone(target, phone) {
+  return fillFirst(target, phone.replace(/^0/, ""),
+    [
+      'input[name*="phone" i]', 'input[name*="telefon" i]', 'input[name*="gsm" i]',
+      'input[name*="cep" i]', 'input[id*="phone" i]', 'input[id*="telefon" i]', 'input[id*="gsm" i]',
+      'input[id*="cep" i]', 'input[placeholder*="telefon" i]', 'input[placeholder*="gsm" i]', 'input[placeholder*="cep" i]',
+      'input[type="tel"]:not([name*="kimlik" i]):not([id*="kimlik" i]):not([name*="identity" i]):not([id*="identity" i]):not([name*="tc" i]):not([id*="tc" i])',
+    ],
+    ["GSM", "Cep Telefonu", "Telefon Numarası", "Telefon"]);
+}
+
+async function latestSessionTarget(page, target, portal) {
+  const pages = page.context().pages().filter((candidate) => !candidate.isClosed());
+  const latest = pages.at(-1);
+  if (!latest || latest === page) return target;
+  await latest.waitForLoadState("domcontentloaded", { timeout: 5000 }).catch(() => {});
+  return resolveTarget(latest, portal);
+}
+
+async function completeSessionLogin({ page, target, job, portal, requestOtp, setState, openIfNeeded = true }) {
   if (portal.smsPolicy !== "session_once" || job.mode !== "ask_sms") return null;
-  const loginVisible = await target.getByRole("button", { name: /^Giriş Yap$/i }).first()
-    .isVisible({ timeout: 500 }).catch(() => false);
-  if (!loginVisible) return null;
-
-  await setState("opening", "Portal oturumu için SMS doğrulaması hazırlanıyor");
-  if (!await clickNamedButton(target, [/^Giriş Yap$/i])) return null;
-  await page.waitForTimeout(700);
-  const loginTarget = await sessionDialogTarget(target);
-
+  let loginTarget = await sessionDialogTarget(target);
   let otpInput = await findOtpInput(loginTarget);
+  let phoneFilled = false;
   if (!otpInput) {
-    const phone10 = job.phone.replace(/^0/, "");
-    const phoneFilled = await fillFirst(loginTarget, phone10,
-      [
-        'input[name*="phone" i]', 'input[name*="telefon" i]', 'input[name*="gsm" i]',
-        'input[name*="cep" i]', 'input[id*="phone" i]', 'input[id*="telefon" i]', 'input[id*="gsm" i]',
-        'input[id*="cep" i]', 'input[placeholder*="telefon" i]', 'input[placeholder*="gsm" i]', 'input[placeholder*="cep" i]',
-        'input[type="tel"]:not([name="kimlikNo"]):not([id="kimlikNo"])',
-      ],
-      ["GSM", "Cep Telefonu", "Telefon Numarası", "Telefon"]);
+    phoneFilled = await fillSessionPhone(loginTarget, job.phone);
+  }
+
+  let opened = false;
+  if (!otpInput && !phoneFilled && openIfNeeded) {
+    const loginVisible = await namedControlVisible(target, [/^Giriş Yap$/i]);
+    if (!loginVisible) return null;
+    await setState("opening", "Portal oturumu için SMS doğrulaması hazırlanıyor");
+    if (!await clickNamedButton(target, [/^Giriş Yap$/i])) return null;
+    opened = true;
+    await page.waitForTimeout(700);
+    const activeTarget = await latestSessionTarget(page, target, portal);
+    loginTarget = await sessionDialogTarget(activeTarget);
+    otpInput = await findOtpInput(loginTarget);
+    if (!otpInput) phoneFilled = await fillSessionPhone(loginTarget, job.phone);
+  }
+
+  if (!otpInput) {
     if (!phoneFilled) {
+      if (!opened) return null;
       const text = await sessionTargetText(loginTarget, target);
       return {
         status: "auth_required",
@@ -248,7 +276,7 @@ async function completeSessionLogin({ page, target, job, portal, requestOtp, set
   }
 
   const loginText = await sessionTargetText(loginTarget, target);
-  if (!otpInput || !SESSION_SMS_PATTERN.test(loginText)) {
+  if (!otpInput) {
     return { status: "auth_required", message: "Lion SMS kodu alanına geçemedi", diagnostics: await pageProfile(loginTarget, page) };
   }
 
@@ -256,12 +284,12 @@ async function completeSessionLogin({ page, target, job, portal, requestOtp, set
   await otpInput.fill(code, { timeout: 4000 });
   if (!await clickNamedButton(loginTarget, [/Doğrula/i, /Onayla/i, /^Giriş Yap$/i, /Devam/i])) await otpInput.press("Enter").catch(() => {});
   await page.waitForTimeout(1100);
-  const stillWaiting = await findOtpInput(target);
-  if (stillWaiting && SESSION_SMS_PATTERN.test(await visibleText(target))) {
+  const stillWaiting = await findOtpInput(loginTarget);
+  if (stillWaiting && SESSION_SMS_PATTERN.test(loginText)) {
     return { status: "auth_required", message: "Lion SMS kodunu kabul etmedi; kodu ve süresini kontrol edin", diagnostics: await pageProfile(loginTarget, page) };
   }
   await setState("filling", "Lion oturumu açıldı; araç sorgusu hazırlanıyor");
-  return null;
+  return { handled: true };
 }
 
 function missingInputMessage(job) {
@@ -277,11 +305,22 @@ async function waitForIhsanOutcome({ page, target, job, portal, resultTimeoutMs,
   let dynamicAttempted = false;
   let lastOffers = [];
   let lastOfferChangeAt = 0;
+  let sessionChallengeCompleted = false;
   while (Date.now() - startedAt < resultTimeoutMs) {
     if (isCancelled()) return { status: "cancelled", message: "Sorgu iptal edildi" };
     const text = await visibleText(target);
     if (BLOCK_PATTERN.test(text)) return { status: "access_blocked", message: "Portal güvenlik duvarı bu sunucunun erişimini engelledi" };
     if (await detectCaptcha(page, text)) return { status: "manual_required", message: "CAPTCHA / güvenlik kontrolü kullanıcı tarafından tamamlanmalı" };
+
+    if (!sessionChallengeCompleted) {
+      const sessionOutcome = await completeSessionLogin({ page, target, job, portal, requestOtp, setState, openIfNeeded: false });
+      if (sessionOutcome?.status) return sessionOutcome;
+      if (sessionOutcome?.handled) {
+        sessionChallengeCompleted = true;
+        await page.waitForTimeout(900);
+        continue;
+      }
+    }
     const detectedState = pageState(text);
     if (detectedState) return { status: detectedState, message: detectedState === "no_offer" ? "Portal teklif bulunamadığını bildirdi" : "Portal oturum veya hız sınırı bildirdi" };
 
@@ -375,7 +414,7 @@ export class IhsanPortalAdapter {
     if (await detectCaptcha(page, firstText)) return { status: "manual_required", message: "CAPTCHA / güvenlik kontrolü kullanıcı tarafından tamamlanmalı" };
     const target = await resolveTarget(page, portal);
     const sessionOutcome = await completeSessionLogin({ page, target, job, portal, requestOtp, setState });
-    if (sessionOutcome) return sessionOutcome;
+    if (sessionOutcome?.status) return sessionOutcome;
 
     const initialState = pageState(await visibleText(target));
     if (initialState) return { status: initialState, message: initialState === "auth_required" ? "Portal oturumu açılmalı" : "Portal isteği kabul etmedi" };
