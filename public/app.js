@@ -20,6 +20,8 @@ const statusNames = {
   input_required: "Eksik / geçersiz bilgi",
   access_blocked: "Portal erişimi engelledi",
   auth_required: "Portal oturumu gerekli",
+  redirect_only: "Başka kaynağa yönlendiriyor",
+  client_error: "Portal uygulaması yüklenemedi",
   manual_required: "Manuel işlem gerekli",
   rate_limited: "Portal hız sınırı",
   timeout: "Zaman aşımı",
@@ -30,7 +32,7 @@ const statusNames = {
 
 const elements = Object.fromEntries([
   "raw-data", "identity", "birth-date", "plate", "registration", "vehicle", "year", "chassis", "engine",
-  "phone", "consent", "start-button", "parse-status", "portal-groups", "progress", "progress-list",
+  "phone", "email", "consent", "start-button", "parse-status", "portal-groups", "progress", "progress-list",
   "progress-title", "progress-subtitle", "job-status", "results", "results-body", "result-count", "otp-dock",
   "otp-cards", "otp-count", "error-banner", "portal-count", "max-concurrency", "concurrency-stat"
 ].map((id) => [id, document.getElementById(id)]));
@@ -166,6 +168,8 @@ function renderPortals({ preserveSelection = false } = {}) {
             manual_required: "CAPTCHA / manuel doğrulama gerekli",
             access_blocked: "Sunucu erişimi engellendi",
             auth_required: "Portal oturumu gerekli",
+            redirect_only: "Bağımsız kaynak değil • başka portala yönlendiriyor",
+            client_error: "Portalın kendi formu yüklenemiyor",
             error: "Bağlantı hatası",
             timeout: "Bağlantı zaman aşımı",
             unsupported: "Adaptör teşhisi eksik",
@@ -332,7 +336,7 @@ async function startJob() {
     const body = await fetchJson("/api/jobs", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ vehicle, mode, phone: phoneDigits(), portalIds, customerConsent: true })
+      body: JSON.stringify({ vehicle, mode, phone: phoneDigits(), email: elements.email.value.trim(), portalIds, customerConsent: true })
     }, 15000);
     rememberActiveJob(body.id);
     renderProgress(body);
@@ -351,6 +355,7 @@ async function boot() {
     const [health, portalData, jobData] = await Promise.all([fetchJson("/health"), fetchJson("/api/portals"), fetchJson("/api/jobs")]);
     if (!health.ok) throw new Error("Çevrimiçi sorgu ajanı başlatılamadı");
     if (health.defaultPhone) elements.phone.value = formatPhone(health.defaultPhone);
+    if (portalData.defaultEmail) elements.email.value = portalData.defaultEmail;
     portals = portalData.portals;
     elements["max-concurrency"].textContent = `En fazla ${portalData.maxConcurrency} eşzamanlı sorgu`;
     elements["concurrency-stat"].textContent = portalData.maxConcurrency;
