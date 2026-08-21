@@ -119,6 +119,12 @@ function selectedPortalIds() {
 }
 
 function renderPortals() {
+  const smsLabels = {
+    none: "SMS yok • doğrulandı",
+    per_query: "Her sorguda SMS",
+    session_once: "Oturum açarken bir kez SMS",
+    unknown: "SMS durumu belirsiz",
+  };
   const grouped = portals.reduce((map, portal) => {
     if (!map.has(portal.group)) map.set(portal.group, []);
     map.get(portal.group).push(portal);
@@ -128,7 +134,7 @@ function renderPortals() {
     <article class="portal-group">
       <h4>${group} • ${items.length}</h4>
       <div class="portal-items">
-        ${items.map((portal) => `<label class="portal-check"><input type="checkbox" value="${portal.id}" ${portal.enabled ? "checked" : "disabled"} /><span></span><div><strong>${portal.name}</strong><small>${portal.enabled ? ({ verified: "Canlı doğrulandı", beta: "Canlı test aşaması" }[portal.integrationStatus] || "Adaptör testi gerekli") : "Adaptör hazır değil"}</small></div></label>`).join("")}
+        ${items.map((portal) => `<label class="portal-check" title="${portal.smsEvidence || ""}"><input type="checkbox" value="${portal.id}" ${portal.enabled ? "checked" : "disabled"} /><span></span><div><strong>${portal.name}</strong><small>${portal.enabled ? ({ verified: "Canlı doğrulandı", beta: "Canlı test aşaması" }[portal.integrationStatus] || "Adaptör testi gerekli") : "Adaptör hazır değil"}<br />${smsLabels[portal.smsPolicy] || smsLabels.unknown}</small></div></label>`).join("")}
       </div>
     </article>
   `).join("");
