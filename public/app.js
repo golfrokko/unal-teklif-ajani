@@ -17,6 +17,8 @@ const statusNames = {
   no_offer: "Teklif yok",
   skipped_sms: "SMS nedeniyle atlandı",
   mapping_required: "Adaptör eşlemesi gerekli",
+  input_required: "Eksik / geçersiz bilgi",
+  access_blocked: "Portal erişimi engelledi",
   auth_required: "Portal oturumu gerekli",
   manual_required: "Manuel işlem gerekli",
   rate_limited: "Portal hız sınırı",
@@ -126,7 +128,7 @@ function renderPortals() {
     <article class="portal-group">
       <h4>${group} • ${items.length}</h4>
       <div class="portal-items">
-        ${items.map((portal) => `<label class="portal-check"><input type="checkbox" value="${portal.id}" ${portal.enabled ? "checked" : "disabled"} /><span></span><div><strong>${portal.name}</strong><small>${portal.enabled ? (portal.integrationStatus === "verified" ? "Canlı doğrulandı" : "Adaptör testi gerekli") : "Devre dışı"}</small></div></label>`).join("")}
+        ${items.map((portal) => `<label class="portal-check"><input type="checkbox" value="${portal.id}" ${portal.enabled ? "checked" : "disabled"} /><span></span><div><strong>${portal.name}</strong><small>${portal.enabled ? ({ verified: "Canlı doğrulandı", beta: "Canlı test aşaması" }[portal.integrationStatus] || "Adaptör testi gerekli") : "Adaptör hazır değil"}</small></div></label>`).join("")}
       </div>
     </article>
   `).join("");
@@ -135,7 +137,7 @@ function renderPortals() {
 
 function renderProgress(job) {
   const states = Object.values(job.portalStates || {});
-  const doneStatuses = ["completed", "no_offer", "skipped_sms", "mapping_required", "auth_required", "manual_required", "rate_limited", "timeout", "error", "cancelled", "interrupted"];
+  const doneStatuses = ["completed", "no_offer", "skipped_sms", "mapping_required", "input_required", "access_blocked", "auth_required", "manual_required", "rate_limited", "timeout", "error", "cancelled", "interrupted"];
   const done = states.filter((state) => doneStatuses.includes(state.status)).length;
   elements.progress.classList.remove("hidden");
   elements["progress-title"].textContent = `${done} / ${states.length} portal tamamlandı`;
