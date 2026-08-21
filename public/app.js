@@ -172,14 +172,15 @@ function renderPortals({ preserveSelection = false } = {}) {
           };
           const readiness = probeLabels[portal.probeState]
             || (portal.enabled ? ({ verified: "Canlı doğrulandı", beta: "Canlı test aşaması" }[portal.integrationStatus] || "Adaptör testi gerekli") : "Canlı test bekleniyor");
-          const checked = portal.enabled && (previousSelection ? previousSelection.has(portal.id) : true);
-          return `<label class="portal-check" title="${escapeHtml(portal.probeMessage || portal.smsEvidence || "")}"><input type="checkbox" value="${escapeHtml(portal.id)}" ${checked ? "checked" : ""} ${portal.enabled ? "" : "disabled"} /><span></span><div><strong>${escapeHtml(portal.name)}</strong><small>${escapeHtml(readiness)}<br />${escapeHtml(smsLabels[portal.smsPolicy] || smsLabels.unknown)}</small></div></label>`;
+          const available = portal.available ?? portal.enabled;
+          const checked = available && (previousSelection ? previousSelection.has(portal.id) : portal.enabled);
+          return `<label class="portal-check" title="${escapeHtml(portal.probeMessage || portal.smsEvidence || "")}"><input type="checkbox" value="${escapeHtml(portal.id)}" ${checked ? "checked" : ""} ${available ? "" : "disabled"} /><span></span><div><strong>${escapeHtml(portal.name)}</strong><small>${escapeHtml(readiness)}<br />${escapeHtml(smsLabels[portal.smsPolicy] || smsLabels.unknown)}</small></div></label>`;
         }).join("")}
       </div>
     </article>
   `).join("");
-  const enabledCount = portals.filter((portal) => portal.enabled).length;
-  elements["portal-count"].textContent = `${enabledCount} hazır / ${portals.length} portal`;
+  const availableCount = portals.filter((portal) => portal.available ?? portal.enabled).length;
+  elements["portal-count"].textContent = `${availableCount} hazır / ${portals.length} portal`;
 }
 
 function renderProgress(job) {
