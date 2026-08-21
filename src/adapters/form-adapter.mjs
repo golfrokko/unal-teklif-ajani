@@ -61,7 +61,7 @@ export async function resolveTarget(page, portal) {
   return page.frames().find((frame) => frame !== page.mainFrame() && /sigorta\.online/i.test(frame.url())) || page;
 }
 
-async function fillQuoteForm(target, job) {
+export async function fillQuoteForm(target, job) {
   const vehicle = job.vehicle;
   const phone10 = job.phone.replace(/^0/, "");
   const filled = {
@@ -76,7 +76,12 @@ async function fillQuoteForm(target, job) {
       ['input[name*="registration" i]', 'input[name*="ruhsat" i]', 'input[name*="belge" i]', 'input[placeholder*="ruhsat" i]'],
       ["Ruhsat Numarası", "Ruhsat Seri", "Belge Seri"]),
     phone: await fillFirst(target, phone10,
-      ['input[type="tel"]', 'input[name*="phone" i]', 'input[name*="gsm" i]', 'input[placeholder*="5__" i]'],
+      [
+        'input[name*="phone" i]', 'input[name*="telefon" i]', 'input[name*="gsm" i]', 'input[name*="cep" i]',
+        'input[id*="phone" i]', 'input[id*="telefon" i]', 'input[id*="gsm" i]', 'input[id*="cep" i]',
+        'input[placeholder*="telefon" i]', 'input[placeholder*="gsm" i]', 'input[placeholder*="cep" i]', 'input[placeholder*="5__" i]',
+        'input[type="tel"]:not([name*="kimlik" i]):not([id*="kimlik" i]):not([name*="identity" i]):not([id*="identity" i]):not([name*="tc" i]):not([id*="tc" i])',
+      ],
       ["GSM", "Cep Telefonu", "Telefon"]),
     chassis: await fillFirst(target, vehicle.chassis,
       ['input[name*="chassis" i]', 'input[name*="sasi" i]'], ["Şasi Numarası", "Şasi No"]),
@@ -148,7 +153,102 @@ export async function findOtpInput(target) {
     const input = target.locator(selector).first();
     if (await input.isVisible({ timeout: 300 }).catch(() => false)) return input;
   }
+  const candidates = target.locator('input[inputmode="numeric"], input[type="number"], input[maxlength]');
+  const count = Math.min(await candidates.count().catch(() => 0), 30);
+  const singleCharacterInputs = [];
+  for (let index = 0; index < count; index += 1) {
+    const input = candidates.nth(index);
+    if (!await input.isVisible({ timeout: 200 }).catch(() => false)) continue;
+    const meta = await input.evaluate((element) => ({
+      type: (element.getAttribute("type") || "text").toLowerCase(),
+      maxLength: Number(element.getAttribute("maxlength") || element.maxLength || 0),
+      semantic: [element.name, element.id, element.placeholder, element.getAttribute("aria-label"), element.parentElement?.innerText]
+        .filter(Boolean).join(" ").toLocaleLowerCase("tr-TR"),
+    })).catch(() => null);
+    if (!meta || meta.type === "tel" || /(telefon|phone|gsm|cep|kimlik|identity|\btc\b|vergi|vkn|plaka|plate|ruhsat|registration|model|year|yıl|sasi|şasi|chassis|motor)/i.test(meta.semantic)) continue;
+    if (meta.maxLength >= 4 && meta.maxLength <= 8) return input;
+    if (meta.maxLength === 1) singleCharacterInputs.push(input);
+  }
+  if (singleCharacterInputs.length >= 4 && singleCharacterInputs.length <= 8) return singleCharacterInputs[0];
   return null;
+}
+
+export async function fillOtpCode(target, code) {
+  const input = await findOtpInput(target);
+  if (!input) return false;
+  const maxLength = await input.evaluate((element) => Number(element.getAttribute("maxlength") || element.maxLength || 0)).catch(() => 0);
+  if (maxLength !== 1) {
+    await input.fill(code, { timeout: 4000 });
+    return true;
+  }
+
+  const candidates = target.locator('input[maxlength="1"], input[inputmode="numeric"][maxlength="1"]');
+  const count = Math.min(await candidates.count().catch(() => 0), 12);
+  const visible = [];
+  for (let index = 0; index < count; index += 1) {
+    const candidate = candidates.nth(index);
+    if (await candidate.isVisible({ timeout: 200 }).catch(() => false)) visible.push(candidate);
+  }
+  if (visible.length < code.length) return false;
+  for (let index = 0; index < code.length; index += 1) await visible[index].fill(code[index], { timeout: 2000 });
+  return true;
+}
+
+async function formSignature(target) {
+  const controls = target.locator("input, select, textarea, button");
+  const signature = await controls.evaluateAll((nodes) => nodes.filter((node) => {
+    const style = window.getComputedStyle(node);
+    return style.display !== "none" && style.visibility !== "hidden" && !node.disabled;
+  }).slice(0, 100).map((node) => [
+    node.tagName,
+    node.getAttribute("type") || "",
+    node.getAttribute("name") || "",
+    node.id || "",
+    node.getAttribute("placeholder") || "",
+    node.tagName === "BUTTON" ? (node.textContent || "").trim().slice(0, 80) : "",
+  ].join(":"))).catch(() => []);
+  return JSON.stringify(signature);
+}
+
+async function quoteFormProfile(target) {
+  const controls = target.locator("input, select, textarea, button");
+  const items = await controls.evaluateAll((nodes) => nodes.filter((node) => {
+    const style = window.getComputedStyle(node);
+    return style.display !== "none" && style.visibility !== "hidden";
+  }).slice(0, 120).map((node) => ({
+    tag: node.tagName.toLowerCase(),
+    type: node.getAttribute("type") || "",
+    name: node.getAttribute("name") || "",
+    id: node.id || "",
+    placeholder: node.getAttribute("placeholder") || "",
+    label: node.getAttribute("aria-label") || "",
+    text: node.tagName === "BUTTON" ? (node.textContent || "").trim().slice(0, 100) : "",
+  }))).catch(() => []);
+  const haystack = items.map((item) => `${item.name} ${item.id} ${item.placeholder} ${item.label}`).join(" ");
+  const buttonText = items.filter((item) => item.tag === "button" || item.type === "submit").map((item) => item.text).join(" ");
+  return {
+    controlCount: items.length,
+    hasIdentity: /(identity|kimlik|\btc\b|vergi|vkn)/i.test(haystack),
+    hasPlate: /(plate|plaka)/i.test(haystack),
+    hasRegistration: /(registration|ruhsat|belge)/i.test(haystack),
+    hasPhone: /(phone|telefon|gsm|cep)/i.test(haystack),
+    hasSubmit: items.some((item) => item.type === "submit") || /(teklif|sorgula|devam|gönder|başla)/i.test(buttonText),
+  };
+}
+
+async function openQuoteFlow(target, page) {
+  const before = await quoteFormProfile(target);
+  if ((before.hasIdentity || before.hasPlate || before.hasRegistration) && before.hasSubmit) return before;
+  const opened = await clickNamedButton(target, [
+    /Trafik Sigortası Teklif/i,
+    /Trafik Teklifi/i,
+    /Teklif Al/i,
+    /Hemen Teklif/i,
+    /Fiyat Al/i,
+  ]);
+  if (!opened) return before;
+  await page.waitForTimeout(1000);
+  return quoteFormProfile(target);
 }
 
 export function pageState(text) {
@@ -158,7 +258,7 @@ export function pageState(text) {
   return null;
 }
 
-export async function waitForOutcome({ page, target, job, portal, resultTimeoutMs, requestOtp, setState, isCancelled }) {
+export async function waitForOutcome({ page, target, job, portal, resultTimeoutMs, requestOtp, setState, isCancelled, attemptedStages = new Set() }) {
   const startedAt = Date.now();
   let lastOffers = [];
   let lastOfferChangeAt = 0;
@@ -174,7 +274,7 @@ export async function waitForOutcome({ page, target, job, portal, resultTimeoutM
     if (otpInput && smsLanguage) {
       if (job.mode === "no_sms") return { status: "skipped_sms", message: "SMS istendiği için atlandı" };
       const code = await requestOtp();
-      await otpInput.fill(code, { timeout: 4000 });
+      if (!await fillOtpCode(target, code)) return { status: "mapping_required", message: "SMS kodu alanı doldurulamadı" };
       if (!await clickSubmit(target)) await otpInput.press("Enter").catch(() => {});
       await setState("collecting", "SMS doğrulandı; gerçek teklifler bekleniyor");
       await page.waitForTimeout(1200);
@@ -194,6 +294,18 @@ export async function waitForOutcome({ page, target, job, portal, resultTimeoutM
     if (/(TEKLİF SONUÇLARI|TEKLİFLER SORGULANIYOR|SORGULAMA DURUMU|FİYATLAR HAZIRLANIYOR)/i.test(text)) {
       await setState("collecting", "Sigorta şirketlerinden fiyat bekleniyor");
     }
+
+    const signature = await formSignature(target);
+    if (signature !== "[]" && !attemptedStages.has(signature)) {
+      attemptedStages.add(signature);
+      const filled = await fillQuoteForm(target, job);
+      const filledCount = Object.values(filled).filter(Boolean).length;
+      if (filledCount && await clickSubmit(target)) {
+        await setState("submitted", "Portalın sonraki adımı dolduruldu; cevap bekleniyor");
+        await page.waitForTimeout(1000);
+        continue;
+      }
+    }
     await page.waitForTimeout(2000);
   }
   if (lastOffers.length) return { status: "completed", message: `${lastOffers.length} şirket teklifi alındı`, offers: lastOffers };
@@ -201,6 +313,23 @@ export async function waitForOutcome({ page, target, job, portal, resultTimeoutM
 }
 
 export class FormPortalAdapter {
+  async probe({ page, portal, navigationTimeoutMs }) {
+    await page.goto(portal.url, { waitUntil: "domcontentloaded", timeout: navigationTimeoutMs });
+    await page.waitForTimeout(700);
+    const text = await visibleText(page);
+    if (await detectCaptcha(page, text)) return { state: "manual_required", message: "CAPTCHA / güvenlik doğrulaması gerekiyor" };
+    const state = pageState(text);
+    if (state) return { state, message: state === "auth_required" ? "Portal oturumu gerekiyor" : "Portal isteği kabul etmedi" };
+    const target = await resolveTarget(page, portal);
+    const profile = await openQuoteFlow(target, page);
+    const formDetected = (profile.hasIdentity || profile.hasPlate || profile.hasRegistration) && profile.hasSubmit;
+    return {
+      state: formDetected ? "form_detected" : "mapping_required",
+      message: formDetected ? "Canlı teklif formu bulundu" : "Teklif formu veya başlangıç düğmesi bulunamadı",
+      fields: profile,
+    };
+  }
+
   async run(context) {
     const { page, portal, job, navigationTimeoutMs, resultTimeoutMs, setState, requestOtp, isCancelled } = context;
     await setState("opening", "Portal açılıyor");
@@ -214,12 +343,17 @@ export class FormPortalAdapter {
     if (initialState) return { status: initialState, message: initialState === "auth_required" ? "Portal oturumu açılmalı" : "Portal isteği kabul etmedi" };
 
     const target = await resolveTarget(page, portal);
+    const profile = await openQuoteFlow(target, page);
+    if (!(profile.hasIdentity || profile.hasPlate || profile.hasRegistration)) {
+      return { status: "mapping_required", message: "Portalın canlı teklif başlangıç formu bulunamadı", diagnostics: { fields: profile } };
+    }
     await setState("filling", "Araç ve müşteri bilgileri dolduruluyor");
     const filled = await fillQuoteForm(target, job);
-    if (!filled.identity || !filled.plate) return { status: "mapping_required", message: "Zorunlu alanlar bu portal için eşleştirilemedi" };
+    if (!filled.identity && !filled.plate && !filled.registration) return { status: "mapping_required", message: "İlk adımdaki kimlik, plaka veya ruhsat alanı eşleştirilemedi" };
+    const attemptedStages = new Set([await formSignature(target)]);
     if (!await clickSubmit(target)) return { status: "mapping_required", message: "Sorgu düğmesi eşleştirilemedi" };
 
     await setState("submitted", "Form gönderildi; portal cevabı bekleniyor");
-    return waitForOutcome({ page, target, job, portal, resultTimeoutMs, requestOtp, setState, isCancelled });
+    return waitForOutcome({ page, target, job, portal, resultTimeoutMs, requestOtp, setState, isCancelled, attemptedStages });
   }
 }

@@ -76,13 +76,13 @@ export class QueryEngine {
     await this.#saveAndPublish(job, "job.failed");
   }
 
-  async probePortal(portal) {
+  async probePortal(portal, { navigationTimeoutMs } = {}) {
     const adapter = getAdapter(portal);
     if (typeof adapter.probe !== "function") return { state: "unsupported", message: "Bu adaptörde form teşhisi yok" };
     return this.browserManager.withPortalPage(portal, (page) => adapter.probe({
       page,
       portal,
-      navigationTimeoutMs: portal.navigationTimeoutMs || this.config.navigationTimeoutMs,
+      navigationTimeoutMs: navigationTimeoutMs || portal.navigationTimeoutMs || this.config.navigationTimeoutMs,
     }));
   }
 
