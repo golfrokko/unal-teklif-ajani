@@ -9,7 +9,7 @@ import { FileStore, publicJob } from "./lib/store.mjs";
 import { normalizeOtp, normalizePhone, safeMessage, validateJobInput } from "./lib/validation.mjs";
 import { QueryEngine } from "./engine.mjs";
 
-const VERSION = "1.3.1";
+const VERSION = "1.3.2";
 const portalRegistry = new Map(portals.map((portal) => [portal.id, Object.freeze({ ...portal })]));
 const store = new FileStore({ jobsDir: paths.jobsDir, settingsFile: paths.settingsFile, retentionDays: config.retentionDays });
 const events = new JobEvents();
@@ -167,6 +167,15 @@ app.patch("/api/v1/portals/:id", async (req, res, next) => {
     };
     await store.savePortalSettings(portalSettings);
     res.json({ portal: portalView(portal) });
+  } catch (error) { next(error); }
+});
+
+app.post(["/api/v1/portals/reset-sessions", "/api/portals/reset-sessions"], async (req, res, next) => {
+  try {
+    const requestedIds = Array.isArray(req.body?.portalIds) ? req.body.portalIds.filter((id) => portalRegistry.has(id)) : null;
+    const targetIds = requestedIds?.length ? requestedIds : [...portalRegistry.keys()];
+    const reset = await browserManager.resetSessions(targetIds);
+    res.json({ ok: true, reset });
   } catch (error) { next(error); }
 });
 

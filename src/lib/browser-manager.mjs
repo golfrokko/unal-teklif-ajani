@@ -1,5 +1,5 @@
 import { chromium } from "playwright";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 export class BrowserManager {
@@ -25,6 +25,19 @@ export class BrowserManager {
 
   async init() {
     await mkdir(this.sessionsDir, { recursive: true, mode: 0o700 });
+  }
+
+  async resetSessions(portalIds) {
+    const reset = [];
+    for (const portalId of portalIds) {
+      try {
+        await unlink(path.join(this.sessionsDir, `${portalId}.json`));
+        reset.push(portalId);
+      } catch (error) {
+        if (error.code !== "ENOENT") throw error;
+      }
+    }
+    return reset;
   }
 
   async getBrowser() {

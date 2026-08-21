@@ -217,14 +217,16 @@ async function namedControlVisible(target, names) {
 }
 
 async function fillSessionPhone(target, phone) {
-  return fillFirst(target, phone.replace(/^0/, ""),
-    [
-      'input[name*="phone" i]', 'input[name*="telefon" i]', 'input[name*="gsm" i]',
-      'input[name*="cep" i]', 'input[id*="phone" i]', 'input[id*="telefon" i]', 'input[id*="gsm" i]',
-      'input[id*="cep" i]', 'input[placeholder*="telefon" i]', 'input[placeholder*="gsm" i]', 'input[placeholder*="cep" i]',
-      'input[type="tel"]:not([name*="kimlik" i]):not([id*="kimlik" i]):not([name*="identity" i]):not([id*="identity" i]):not([name*="tc" i]):not([id*="tc" i])',
-    ],
-    ["GSM", "Cep Telefonu", "Telefon Numarası", "Telefon"]);
+  const selectors = [
+    'input[name*="phone" i]', 'input[name*="telefon" i]', 'input[name*="gsm" i]',
+    'input[name*="cep" i]', 'input[id*="phone" i]', 'input[id*="telefon" i]', 'input[id*="gsm" i]',
+    'input[id*="cep" i]', 'input[placeholder*="telefon" i]', 'input[placeholder*="gsm" i]', 'input[placeholder*="cep" i]',
+    'input[type="tel"]:not([name*="kimlik" i]):not([id*="kimlik" i]):not([name*="identity" i]):not([id*="identity" i]):not([name*="tc" i]):not([id*="tc" i])',
+  ];
+  const labels = ["GSM", "Cep Telefonu", "Telefon Numarası", "Telefon"];
+  const withoutLeadingZero = phone.replace(/^0/, "");
+  return (await fillFirst(target, withoutLeadingZero, selectors, labels))
+    || (await fillFirst(target, phone, selectors, labels));
 }
 
 async function latestSessionTarget(page, target, portal) {
@@ -253,15 +255,26 @@ async function completeSessionLogin({ page, target, job, portal, requestOtp, set
     if (!await clickNamedButton(target, [/^Giriş Yap$/i])) return null;
     opened = true;
     const dialogDeadline = Date.now() + 6000;
+    let dialogBlocked = null;
     while (Date.now() < dialogDeadline) {
       await page.waitForTimeout(400);
       const activeTarget = await latestSessionTarget(page, target, portal);
       loginTarget = await sessionDialogTarget(activeTarget);
+      const dialogText = await visibleText(loginTarget);
+      if (BLOCK_PATTERN.test(dialogText)) {
+        dialogBlocked = { status: "access_blocked", message: "Giriş penceresi açılırken portal güvenlik duvarı erişimi engelledi" };
+        break;
+      }
+      if (await detectCaptcha(page, dialogText)) {
+        dialogBlocked = { status: "manual_required", message: "Giriş penceresinde CAPTCHA / güvenlik doğrulaması çıktı" };
+        break;
+      }
       otpInput = await findOtpInput(loginTarget);
       if (otpInput) break;
       phoneFilled = await fillSessionPhone(loginTarget, job.phone);
       if (phoneFilled) break;
     }
+    if (dialogBlocked) return { ...dialogBlocked, diagnostics: await pageProfile(loginTarget, page) };
   }
 
   if (!otpInput) {

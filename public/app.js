@@ -85,8 +85,8 @@ function renderLog() {
   elements.log.classList.toggle("hidden", jobLog.length === 0);
   elements["log-count"].textContent = `${jobLog.length} kayıt`;
   elements["log-list"].innerHTML = jobLog.length
-    ? [...jobLog].reverse().map((entry) => `<div class="log-row" data-level="${entry.level}"><time>${entry.time.toLocaleTimeString("tr-TR")}</time><i></i><p>${entry.html}</p></div>`).join("")
-    : `<div class="log-empty">Henüz kayıt yok.</div>`;
+    ? [...jobLog].reverse().map((entry) => `<div class="sidebar-log-row" data-level="${entry.level}"><i></i><div><time>${entry.time.toLocaleTimeString("tr-TR")}</time><p>${entry.html}</p></div></div>`).join("")
+    : `<div class="sidebar-log-empty">Henüz kayıt yok.</div>`;
 }
 
 function appendLog(html, level = "info") {
@@ -101,18 +101,19 @@ function updateJobLog(job) {
     loggedPortalUpdates.clear();
     loggedJobStatus = null;
     loggedJobId = job.id;
-    appendLog(`Sorgu izleniyor (${Object.keys(job.portalStates || {}).length} portal).`, "info");
+    appendLog(`API: sorgu oluşturuldu, ${Object.keys(job.portalStates || {}).length} portal kuyruğa alındı.`, "info");
   }
   for (const state of Object.values(job.portalStates || {})) {
     if (loggedPortalUpdates.get(state.portalId) === state.updatedAt) continue;
     loggedPortalUpdates.set(state.portalId, state.updatedAt);
-    const label = statusNames[state.status] || state.status;
-    const detail = state.message && state.message !== label ? state.message : label;
-    appendLog(`<b>${escapeHtml(state.portalName)}</b> — ${escapeHtml(detail)}`, logLevelForStatus(state.status));
+    const stage = statusNames[state.status] || state.status;
+    const attempt = state.attempt > 1 ? ` · deneme ${state.attempt}` : "";
+    const detail = state.message && state.message !== stage ? ` — ${escapeHtml(state.message)}` : "";
+    appendLog(`<b>${escapeHtml(state.portalName)}</b> <em>${escapeHtml(stage)}${attempt}</em>${detail}`, logLevelForStatus(state.status));
   }
   if (job.status !== loggedJobStatus) {
     loggedJobStatus = job.status;
-    const jobLabels = { completed: "Sorgu tamamlandı.", partial: "Sorgu kısmi sonuçla tamamlandı.", failed: "Sorgu başarısız oldu.", cancelled: "Sorgu iptal edildi.", interrupted: "Sorgu sunucu yeniden başladığı için kesintiye uğradı." };
+    const jobLabels = { completed: "API: sorgu tamamlandı.", partial: "API: sorgu kısmi sonuçla tamamlandı.", failed: "API: sorgu başarısız oldu.", cancelled: "API: sorgu iptal edildi.", interrupted: "API: sunucu yeniden başladığı için sorgu kesintiye uğradı." };
     if (jobLabels[job.status]) appendLog(jobLabels[job.status], logLevelForStatus(job.status));
   }
 }
@@ -488,6 +489,21 @@ document.getElementById("select-none").addEventListener("click", () => {
 document.getElementById("select-ihsan").addEventListener("click", () => {
   portalSelectionTouched = true;
   document.querySelectorAll('.portal-check input').forEach((input) => { input.checked = !input.disabled && portals.find((portal) => portal.id === input.value)?.group === "İhsan altyapısı"; });
+});
+document.getElementById("reset-sessions").addEventListener("click", async (event) => {
+  const button = event.currentTarget;
+  const original = button.textContent;
+  button.disabled = true;
+  button.textContent = "Sıfırlanıyor…";
+  try {
+    await fetchJson("/api/portals/reset-sessions", { method: "POST" }, 20000);
+    button.textContent = "Sıfırlandı ✓";
+  } catch (error) {
+    showError(error.message);
+    button.textContent = original;
+  } finally {
+    window.setTimeout(() => { button.disabled = false; button.textContent = original; }, 2500);
+  }
 });
 
 boot();
