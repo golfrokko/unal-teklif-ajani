@@ -252,11 +252,16 @@ async function completeSessionLogin({ page, target, job, portal, requestOtp, set
     await setState("opening", "Portal oturumu için SMS doğrulaması hazırlanıyor");
     if (!await clickNamedButton(target, [/^Giriş Yap$/i])) return null;
     opened = true;
-    await page.waitForTimeout(700);
-    const activeTarget = await latestSessionTarget(page, target, portal);
-    loginTarget = await sessionDialogTarget(activeTarget);
-    otpInput = await findOtpInput(loginTarget);
-    if (!otpInput) phoneFilled = await fillSessionPhone(loginTarget, job.phone);
+    const dialogDeadline = Date.now() + 6000;
+    while (Date.now() < dialogDeadline) {
+      await page.waitForTimeout(400);
+      const activeTarget = await latestSessionTarget(page, target, portal);
+      loginTarget = await sessionDialogTarget(activeTarget);
+      otpInput = await findOtpInput(loginTarget);
+      if (otpInput) break;
+      phoneFilled = await fillSessionPhone(loginTarget, job.phone);
+      if (phoneFilled) break;
+    }
   }
 
   if (!otpInput) {
