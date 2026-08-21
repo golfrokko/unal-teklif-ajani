@@ -5,6 +5,7 @@ import {
   clickSubmit,
   detectCaptcha,
   fillFirst,
+  fillOtpCode,
   findOtpInput,
   pageState,
   resolveTarget,
@@ -238,6 +239,7 @@ async function completeSessionLogin({ page, target, job, portal, requestOtp, set
   if (portal.smsPolicy !== "session_once" || job.mode !== "ask_sms") return null;
   let loginTarget = await sessionDialogTarget(target);
   let otpInput = await findOtpInput(loginTarget);
+  let pendingCode = null;
   let phoneFilled = false;
   if (!otpInput) {
     phoneFilled = await fillSessionPhone(loginTarget, job.phone);
@@ -273,16 +275,26 @@ async function completeSessionLogin({ page, target, job, portal, requestOtp, set
     if (!sent) {
       return { status: "mapping_required", message: "Lion SMS gönderme düğmesi eşleştirilemedi", diagnostics: await pageProfile(loginTarget, page) };
     }
+    // SMS isteği portal tarafından kabul edildiği anda panelde kod alanını aç.
+    // Portalın tek kutu veya parçalı OTP arayüzünü çizmesini beklemek kullanıcı
+    // tarafındaki kod girişini geciktirmemeli.
+    pendingCode = requestOtp();
     otpInput = await waitForSessionOtp(loginTarget, page);
   }
 
   const loginText = await sessionTargetText(loginTarget, target);
   if (!otpInput) {
-    return { status: "auth_required", message: "Lion SMS kodu alanına geçemedi", diagnostics: await pageProfile(loginTarget, page) };
+    if (pendingCode) {
+      await pendingCode;
+      otpInput = await waitForSessionOtp(loginTarget, page, 8000);
+    }
+    if (!otpInput) return { status: "auth_required", message: "Lion SMS gönderdi ancak portal kod alanını göstermedi", diagnostics: await pageProfile(loginTarget, page) };
   }
 
-  const code = await requestOtp();
-  await otpInput.fill(code, { timeout: 4000 });
+  const code = pendingCode ? await pendingCode : await requestOtp();
+  if (!await fillOtpCode(loginTarget, code)) {
+    return { status: "mapping_required", message: "Lion SMS kodu kutuları doldurulamadı", diagnostics: await pageProfile(loginTarget, page) };
+  }
   if (!await clickNamedButton(loginTarget, [/Doğrula/i, /Onayla/i, /^Giriş Yap$/i, /Devam/i])) await otpInput.press("Enter").catch(() => {});
   await page.waitForTimeout(1100);
   const stillWaiting = await findOtpInput(loginTarget);
@@ -330,7 +342,7 @@ async function waitForIhsanOutcome({ page, target, job, portal, resultTimeoutMs,
     if (otpInput && smsLanguage) {
       if (job.mode === "no_sms") return { status: "skipped_sms", message: "SMS istendiği için atlandı" };
       const code = await requestOtp();
-      await otpInput.fill(code, { timeout: 4000 });
+      if (!await fillOtpCode(target, code)) return { status: "mapping_required", message: "SMS kodu kutuları doldurulamadı", diagnostics: await pageProfile(target, page) };
       if (!await clickSubmit(target)) await otpInput.press("Enter").catch(() => {});
       await setState("collecting", "SMS doğrulandı; gerçek teklifler bekleniyor");
       await page.waitForTimeout(1000);
