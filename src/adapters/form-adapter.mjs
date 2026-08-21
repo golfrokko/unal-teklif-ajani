@@ -262,6 +262,11 @@ export async function waitForOutcome({ page, target, job, portal, resultTimeoutM
   const startedAt = Date.now();
   let lastOffers = [];
   let lastOfferChangeAt = 0;
+  let lastStage = "Portal formu gönderildi; cevap bekleniyor";
+  const track = (status, message, extra) => {
+    lastStage = message;
+    return setState(status, message, extra);
+  };
   while (Date.now() - startedAt < resultTimeoutMs) {
     if (isCancelled()) return { status: "cancelled", message: "Sorgu iptal edildi" };
     const text = await visibleText(target);
@@ -276,7 +281,7 @@ export async function waitForOutcome({ page, target, job, portal, resultTimeoutM
       const code = await requestOtp();
       if (!await fillOtpCode(target, code)) return { status: "mapping_required", message: "SMS kodu alanı doldurulamadı" };
       if (!await clickSubmit(target)) await otpInput.press("Enter").catch(() => {});
-      await setState("collecting", "SMS doğrulandı; gerçek teklifler bekleniyor");
+      await track("collecting", "SMS doğrulandı; gerçek teklifler bekleniyor");
       await page.waitForTimeout(1200);
       continue;
     }
@@ -292,7 +297,7 @@ export async function waitForOutcome({ page, target, job, portal, resultTimeoutM
       if (Date.now() - lastOfferChangeAt >= 8000) return { status: "completed", message: `${offers.length} şirket teklifi alındı`, offers };
     }
     if (/(TEKLİF SONUÇLARI|TEKLİFLER SORGULANIYOR|SORGULAMA DURUMU|FİYATLAR HAZIRLANIYOR)/i.test(text)) {
-      await setState("collecting", "Sigorta şirketlerinden fiyat bekleniyor");
+      await track("collecting", "Sigorta şirketlerinden fiyat bekleniyor");
     }
 
     const signature = await formSignature(target);
@@ -301,7 +306,7 @@ export async function waitForOutcome({ page, target, job, portal, resultTimeoutM
       const filled = await fillQuoteForm(target, job);
       const filledCount = Object.values(filled).filter(Boolean).length;
       if (filledCount && await clickSubmit(target)) {
-        await setState("submitted", "Portalın sonraki adımı dolduruldu; cevap bekleniyor");
+        await track("submitted", "Portalın sonraki adımı dolduruldu; cevap bekleniyor");
         await page.waitForTimeout(1000);
         continue;
       }
@@ -309,7 +314,11 @@ export async function waitForOutcome({ page, target, job, portal, resultTimeoutM
     await page.waitForTimeout(2000);
   }
   if (lastOffers.length) return { status: "completed", message: `${lastOffers.length} şirket teklifi alındı`, offers: lastOffers };
-  return { status: "timeout", message: "Portal cevap vermedi; teklif yok olarak işaretlenmedi" };
+  return {
+    status: "timeout",
+    message: `Portal cevap vermedi; teklif yok olarak işaretlenmedi (son aşama: ${lastStage})`,
+    diagnostics: { lastVisibleText: (await visibleText(target)).replace(/\s+/g, " ").trim().slice(0, 400) },
+  };
 }
 
 export class FormPortalAdapter {

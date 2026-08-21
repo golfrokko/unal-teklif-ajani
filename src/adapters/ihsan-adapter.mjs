@@ -83,6 +83,19 @@ async function revealDynamicSection(target, page) {
   return anyVisible(target, selectors);
 }
 
+async function fillSelectByUserValue(target, selector, value) {
+  const select = target.locator(selector).first();
+  const options = await select.locator("option").evaluateAll((nodes) => nodes.slice(0, 250).map((node) => ({
+    value: node.value,
+    label: node.textContent?.trim() || "",
+    disabled: node.disabled,
+    selected: node.selected,
+  }))).catch(() => []);
+  const option = chooseBestOption(options, [value]);
+  if (!option) return false;
+  return select.selectOption(option.value, { timeout: 4000 }).then(() => true).catch(() => false);
+}
+
 async function missingVisibleDynamicFields(target) {
   const fields = [
     ["araç cinsi", "#aracCinsi"],
@@ -245,15 +258,21 @@ async function completeSessionLogin({ page, target, job, portal, requestOtp, set
   let otpInput = await findOtpInput(loginTarget);
   let pendingCode = null;
   let phoneFilled = false;
+
+  const loginVisible = !otpInput && await namedControlVisible(target, [/^Giriş Yap$/i]);
+  const smsStepLikely = loginVisible || (!otpInput && SESSION_SMS_PATTERN.test(await visibleText(loginTarget)));
+  if (!otpInput && !smsStepLikely) {
+    // Ne SMS/giriş kutusu ne "Giriş Yap" görünüyor: portal önceki oturumdan zaten
+    // giriş yapılmış olabilir. Bu portalda yapılacak bir şey yok, akışa devam.
+    return null;
+  }
   if (!otpInput) {
     phoneFilled = await fillSessionPhone(loginTarget, job.phone);
   }
 
   let opened = false;
-  if (!otpInput && !phoneFilled && openIfNeeded) {
-    const loginVisible = await namedControlVisible(target, [/^Giriş Yap$/i]);
-    if (!loginVisible) return null;
-    await setState("opening", "Portal oturumu için SMS doğrulaması hazırlanıyor");
+  if (!otpInput && !phoneFilled && loginVisible && openIfNeeded) {
+    await setState("opening", `${portal.name} oturumu için SMS doğrulaması hazırlanıyor`);
     if (!await clickNamedButton(target, [/^Giriş Yap$/i])) return null;
     opened = true;
     const dialogDeadline = Date.now() + 6000;
@@ -343,6 +362,11 @@ async function waitForIhsanOutcome({ page, target, job, portal, resultTimeoutMs,
   let lastOffers = [];
   let lastOfferChangeAt = 0;
   let sessionChallengeCompleted = false;
+  let lastStage = "Portal formu gönderildi; cevap bekleniyor";
+  const track = (status, message, extra) => {
+    lastStage = message;
+    return setState(status, message, extra);
+  };
   while (Date.now() - startedAt < resultTimeoutMs) {
     if (isCancelled()) return { status: "cancelled", message: "Sorgu iptal edildi" };
     const text = await visibleText(target);
@@ -350,7 +374,7 @@ async function waitForIhsanOutcome({ page, target, job, portal, resultTimeoutMs,
     if (await detectCaptcha(page, text)) return { status: "manual_required", message: "CAPTCHA / güvenlik kontrolü kullanıcı tarafından tamamlanmalı" };
 
     if (!sessionChallengeCompleted) {
-      const sessionOutcome = await completeSessionLogin({ page, target, job, portal, requestOtp, setState, openIfNeeded: true });
+      const sessionOutcome = await completeSessionLogin({ page, target, job, portal, requestOtp, setState: track, openIfNeeded: true });
       if (sessionOutcome?.status) return sessionOutcome;
       if (sessionOutcome?.handled) {
         sessionChallengeCompleted = true;
@@ -368,7 +392,7 @@ async function waitForIhsanOutcome({ page, target, job, portal, resultTimeoutMs,
       const code = await requestOtp();
       if (!await fillOtpCode(target, code)) return { status: "mapping_required", message: "SMS kodu kutuları doldurulamadı", diagnostics: await pageProfile(target, page) };
       if (!await clickSubmit(target)) await otpInput.press("Enter").catch(() => {});
-      await setState("collecting", "SMS doğrulandı; gerçek teklifler bekleniyor");
+      await track("collecting", "SMS doğrulandı; gerçek teklifler bekleniyor");
       await page.waitForTimeout(1000);
       continue;
     }
@@ -386,7 +410,7 @@ async function waitForIhsanOutcome({ page, target, job, portal, resultTimeoutMs,
     const hasDynamicStep = /(EKSTRA BİLGİLER|ARAÇ CİNSİ|ARAÇ MODEL YILI|MARKA KODU|ŞASİ NUMARASI)/i.test(text);
     if (hasDynamicStep && !dynamicAttempted) {
       dynamicAttempted = true;
-      await setState("filling", "Portalın istediği ek araç bilgileri dolduruluyor");
+      await track("filling", "Portalın istediği ek araç bilgileri dolduruluyor");
       const revealed = await revealDynamicSection(target, page);
       if (!revealed) {
         return { status: "mapping_required", message: "Ekstra araç bilgileri bölümü açılamadı", diagnostics: await pageProfile(target, page) };
@@ -396,14 +420,6 @@ async function waitForIhsanOutcome({ page, target, job, portal, resultTimeoutMs,
         .some((key) => dynamic[key]);
       const missingDynamic = await missingVisibleDynamicFields(target);
       if (missingDynamic.length) {
-        const blocking = missingDynamic.filter((field) => !field.requestable);
-        if (blocking.length) {
-          return {
-            status: "input_required",
-            message: `Portalın ek araç alanları tamamlanamadı: ${missingDynamic.map((field) => field.label).join(", ")}`,
-            diagnostics: await pageProfile(target, page),
-          };
-        }
         for (const field of missingDynamic) {
           if (isCancelled()) return { status: "cancelled", message: "Sorgu iptal edildi" };
           const value = await requestField(field.label, field.selector).catch(() => null);
@@ -414,13 +430,22 @@ async function waitForIhsanOutcome({ page, target, job, portal, resultTimeoutMs,
               diagnostics: await pageProfile(target, page),
             };
           }
-          await target.locator(field.selector).first().fill(value, { timeout: 3000 }).catch(() => {});
+          const filled = field.requestable
+            ? await target.locator(field.selector).first().fill(value, { timeout: 3000 }).then(() => true).catch(() => false)
+            : await fillSelectByUserValue(target, field.selector, value);
+          if (!filled) {
+            return {
+              status: "input_required",
+              message: `"${field.label}" için girilen "${value}" değeri portalın seçenekleriyle eşleşmedi`,
+              diagnostics: await pageProfile(target, page),
+            };
+          }
           changed = true;
         }
-        await setState("filling", "Panelden girilen ek bilgiler dolduruldu");
+        await track("filling", "Panelden girilen ek bilgiler dolduruldu");
       }
       if (changed && await clickSubmit(target)) {
-        await setState("submitted", "Ek araç bilgileri gönderildi; portal cevabı bekleniyor");
+        await track("submitted", "Ek araç bilgileri gönderildi; portal cevabı bekleniyor");
         await page.waitForTimeout(1200);
         continue;
       }
@@ -433,11 +458,15 @@ async function waitForIhsanOutcome({ page, target, job, portal, resultTimeoutMs,
         diagnostics: await pageProfile(target, page),
       };
     }
-    if (RESULT_PROGRESS_PATTERN.test(text)) await setState("collecting", "Sigorta şirketlerinden doğrulanmış fiyat bekleniyor");
+    if (RESULT_PROGRESS_PATTERN.test(text)) await track("collecting", "Sigorta şirketlerinden doğrulanmış fiyat bekleniyor");
     await page.waitForTimeout(1500);
   }
   if (lastOffers.length) return { status: "completed", message: `${lastOffers.length} şirket teklifi doğrulandı`, offers: lastOffers };
-  return { status: "timeout", message: "Portal süre içinde doğrulanmış teklif veya teklif-yok cevabı vermedi", diagnostics: await pageProfile(target, page) };
+  return {
+    status: "timeout",
+    message: `Portal süre içinde doğrulanmış teklif veya teklif-yok cevabı vermedi (son aşama: ${lastStage})`,
+    diagnostics: { ...await pageProfile(target, page), lastVisibleText: (await visibleText(target)).replace(/\s+/g, " ").trim().slice(0, 400) },
+  };
 }
 
 export class IhsanPortalAdapter {

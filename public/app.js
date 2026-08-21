@@ -112,6 +112,10 @@ function updateJobLog(job) {
     const attempt = state.attempt > 1 ? ` · deneme ${state.attempt}` : "";
     const detail = state.message && state.message !== stage ? ` — ${escapeHtml(state.message)}` : "";
     appendLog(`<b>${escapeHtml(state.portalName)}</b> <em>${escapeHtml(stage)}${attempt}</em>${detail}`, logLevelForStatus(state.status));
+    const siteText = state.diagnostics?.lastVisibleText;
+    if (siteText) {
+      appendLog(`<b>${escapeHtml(state.portalName)}</b> sitede görünen metin: <em class="log-quote">${escapeHtml(siteText.slice(0, 220))}${siteText.length > 220 ? "…" : ""}</em>`, "warn");
+    }
   }
   if (job.status !== loggedJobStatus) {
     loggedJobStatus = job.status;
