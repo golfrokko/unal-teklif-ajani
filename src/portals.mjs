@@ -1,7 +1,7 @@
 export const portals = [
-  { id: "lion", name: "Sigorta Lion", url: "https://lion.sigorta.online/trafik", adapter: "ihsan", group: "İhsan altyapısı", verifiedForm: true },
-  { id: "bitikla", name: "Bi Tıkla Sigorta", url: "https://bitikla.sigorta.online/trafik", adapter: "ihsan", group: "İhsan altyapısı", verifiedForm: true },
-  { id: "sigortabaz", name: "SigortaBaz", url: "https://teklif.sigortabaz.com/trafik", adapter: "ihsan", group: "İhsan altyapısı", verifiedForm: true },
+  { id: "lion", name: "Sigorta Lion", url: "https://lion.sigorta.online/trafik", adapter: "ihsan", group: "İhsan altyapısı", verifiedForm: true, defaultEnabled: true, integrationStatus: "beta" },
+  { id: "bitikla", name: "Bi Tıkla Sigorta", url: "https://bitikla.sigorta.online/trafik", adapter: "ihsan", group: "İhsan altyapısı", verifiedForm: true, defaultEnabled: true, integrationStatus: "beta" },
+  { id: "sigortabaz", name: "SigortaBaz", url: "https://teklif.sigortabaz.com/trafik", adapter: "ihsan", group: "İhsan altyapısı", verifiedForm: true, defaultEnabled: true, integrationStatus: "beta" },
   { id: "sigortamobil", name: "SigortaMobil", url: "https://sigortamobil.sigorta.online/trafik", adapter: "ihsan", group: "İhsan altyapısı", verifiedForm: true },
   { id: "tasalti", name: "Taşaltı Teklif", url: "https://tasalti.sigorta.online/trafik", adapter: "ihsan", group: "İhsan altyapısı", verifiedForm: true },
   { id: "sert", name: "Sert Sigorta", url: "https://sert.sigorta.online/trafik", adapter: "ihsan", group: "İhsan altyapısı", verifiedForm: false },
