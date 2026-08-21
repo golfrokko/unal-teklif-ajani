@@ -120,6 +120,13 @@ export async function clickNamedButton(target, names) {
         }
       } catch {}
     }
+    try {
+      const control = target.getByText(name, { exact: true }).first();
+      if (await control.isVisible({ timeout: 500 }) && await control.isEnabled({ timeout: 500 })) {
+        await control.click({ timeout: 5000 });
+        return true;
+      }
+    } catch {}
   }
   return false;
 }
