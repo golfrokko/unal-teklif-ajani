@@ -121,6 +121,12 @@ export class QueryEngine {
   }
 
   async #executePortal(job, portal) {
+    if (job.mode === "no_sms" && ["per_query", "session_once"].includes(portal.smsPolicy)) {
+      await this.#setPortalState(job, portal, "skipped_sms", portal.smsPolicy === "session_once"
+        ? "Bu portal oturum doğrulaması için SMS isteyebildiğinden tarayıcı açılmadan atlandı"
+        : "Bu portal her teklif sorgusunda SMS doğrulaması istediğinden tarayıcı açılmadan atlandı");
+      return;
+    }
     const adapter = getAdapter(portal);
     for (let attempt = 0; attempt <= this.config.retryCount; attempt += 1) {
       try {
