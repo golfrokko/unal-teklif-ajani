@@ -1,6 +1,7 @@
 import { extractOffersFromText } from "../lib/results.mjs";
 import {
   acceptRequiredConsents,
+  clickNamedButton,
   clickSubmit,
   detectCaptcha,
   fillFirst,
@@ -13,6 +14,7 @@ import {
 const BLOCK_PATTERN = /(SORRY, YOU HAVE BEEN BLOCKED|YOU ARE UNABLE TO ACCESS|ACCESS DENIED|ERİŞİM ENGELLENDİ|REQUEST BLOCKED)/i;
 const VALIDATION_PATTERN = /(LÜTFEN GEÇERLİ|BU ALAN ZORUNLUDUR|ALANI ZORUNLUDUR|DEVAM ETMEK İÇİN BU ALANI|EKSİK BİLGİ)/i;
 const RESULT_PROGRESS_PATTERN = /(TEKLİF SONUÇLARI|TEKLİFLER SORGULANIYOR|SORGULAMA DURUMU|FİYATLAR HAZIRLANIYOR|ŞİRKETLERDEN TEKLİF)/i;
+const SESSION_SMS_PATTERN = /(SMS|TEK KULLANIMLIK|DOĞRULAMA KODU|ONAY KODU|CEP TELEFONUNUZA)/i;
 
 function normalize(value) {
   return String(value || "")
@@ -53,13 +55,52 @@ async function selectLabeled(target, { labels, selectors, candidates }) {
       value: node.value,
       label: node.textContent?.trim() || "",
       disabled: node.disabled,
+      selected: node.selected,
     })));
+    if (options.some((option) => option.selected && !option.disabled && String(option.value || "").trim())) return true;
     const option = chooseBestOption(options, candidates);
     if (!option) continue;
     await select.selectOption(option.value, { timeout: 4000 });
     return true;
   }
   return false;
+}
+
+async function anyVisible(target, selectors) {
+  for (const selector of selectors) {
+    if (await target.locator(selector).first().isVisible({ timeout: 250 }).catch(() => false)) return true;
+  }
+  return false;
+}
+
+async function revealDynamicSection(target, page) {
+  const selectors = ["#aracCinsi", "#aracModelYil", "#aracMarka", "#aracModeli", "#sasiNo", "#motorNo"];
+  if (await anyVisible(target, selectors)) return true;
+  const opened = await clickNamedButton(target, [/^Ekstra Bilgiler$/i, /Araç Bilgileri/i]);
+  if (!opened) return false;
+  await page.waitForTimeout(450);
+  return anyVisible(target, selectors);
+}
+
+async function missingVisibleDynamicFields(target) {
+  const fields = [
+    ["araç cinsi", "#aracCinsi"],
+    ["model yılı", "#aracModelYil"],
+    ["marka kodu", "#aracMarkaKodu"],
+    ["araç markası", "#aracMarka"],
+    ["tip kodu", "#aracTipKodu"],
+    ["araç tipi", "#aracModeli"],
+    ["şasi numarası", "#sasiNo"],
+    ["motor numarası", "#motorNo"],
+  ];
+  const missing = [];
+  for (const [label, selector] of fields) {
+    const control = target.locator(selector).first();
+    if (!await control.isVisible({ timeout: 200 }).catch(() => false)) continue;
+    const value = await control.inputValue({ timeout: 500 }).catch(() => "");
+    if (!String(value || "").trim()) missing.push(label);
+  }
+  return missing;
 }
 
 function vehicleCandidates(vehicleText) {
@@ -73,7 +114,6 @@ function vehicleCandidates(vehicleText) {
 
 async function fillIhsanFields(target, job, { includeDynamic = false, page = null } = {}) {
   const vehicle = job.vehicle;
-  const phone10 = job.phone.replace(/^0/, "");
   const filled = {
     identity: await fillFirst(target, vehicle.identity,
       ['input[placeholder*="kimlik numaranızı" i]', 'input[name*="identity" i]', 'input[name*="kimlik" i]', 'input[name*="tc" i]'],
@@ -85,8 +125,6 @@ async function fillIhsanFields(target, job, { includeDynamic = false, page = nul
     registration: await fillFirst(target, vehicle.registration,
       ['input[placeholder*="Ruhsat numaranızı" i]', 'input[name*="registration" i]', 'input[name*="ruhsat" i]', 'input[name*="belge" i]'],
       ["Ruhsat Numarası", "Ruhsat Seri", "Belge Seri"]),
-    phone: await fillFirst(target, phone10,
-      ['input[type="tel"]', 'input[name*="phone" i]', 'input[name*="gsm" i]'], ["GSM", "Cep Telefonu", "Telefon"]),
   };
 
   if (includeDynamic) {
@@ -139,6 +177,121 @@ async function pageProfile(target, page) {
   };
 }
 
+async function waitForSessionOtp(target, page, timeoutMs = 15000) {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    const otpInput = await findOtpInput(target);
+    if (otpInput) return otpInput;
+    await page.waitForTimeout(500);
+  }
+  return null;
+}
+
+async function sessionDialogTarget(target) {
+  const dialogs = target.locator('[role="dialog"], .modal.show, dialog[open], .offcanvas.show');
+  const count = Math.min(await dialogs.count().catch(() => 0), 20);
+  for (let index = count - 1; index >= 0; index -= 1) {
+    const dialog = dialogs.nth(index);
+    if (await dialog.isVisible({ timeout: 250 }).catch(() => false)) return dialog;
+  }
+  return target;
+}
+
+async function sessionTargetText(loginTarget, fallbackTarget) {
+  if (loginTarget !== fallbackTarget) {
+    const text = await loginTarget.innerText({ timeout: 3000 }).catch(() => "");
+    if (text) return text.slice(0, 50000);
+  }
+  return visibleText(fallbackTarget);
+}
+
+async function namedControlVisible(target, names) {
+  for (const name of names) {
+    for (const role of ["button", "link"]) {
+      if (await target.getByRole(role, { name }).first().isVisible({ timeout: 300 }).catch(() => false)) return true;
+    }
+  }
+  return false;
+}
+
+async function fillSessionPhone(target, phone) {
+  return fillFirst(target, phone.replace(/^0/, ""),
+    [
+      'input[name*="phone" i]', 'input[name*="telefon" i]', 'input[name*="gsm" i]',
+      'input[name*="cep" i]', 'input[id*="phone" i]', 'input[id*="telefon" i]', 'input[id*="gsm" i]',
+      'input[id*="cep" i]', 'input[placeholder*="telefon" i]', 'input[placeholder*="gsm" i]', 'input[placeholder*="cep" i]',
+      'input[type="tel"]:not([name*="kimlik" i]):not([id*="kimlik" i]):not([name*="identity" i]):not([id*="identity" i]):not([name*="tc" i]):not([id*="tc" i])',
+    ],
+    ["GSM", "Cep Telefonu", "Telefon Numarası", "Telefon"]);
+}
+
+async function latestSessionTarget(page, target, portal) {
+  const pages = page.context().pages().filter((candidate) => !candidate.isClosed());
+  const latest = pages.at(-1);
+  if (!latest || latest === page) return target;
+  await latest.waitForLoadState("domcontentloaded", { timeout: 5000 }).catch(() => {});
+  return resolveTarget(latest, portal);
+}
+
+async function completeSessionLogin({ page, target, job, portal, requestOtp, setState, openIfNeeded = true }) {
+  if (portal.smsPolicy !== "session_once" || job.mode !== "ask_sms") return null;
+  let loginTarget = await sessionDialogTarget(target);
+  let otpInput = await findOtpInput(loginTarget);
+  let phoneFilled = false;
+  if (!otpInput) {
+    phoneFilled = await fillSessionPhone(loginTarget, job.phone);
+  }
+
+  let opened = false;
+  if (!otpInput && !phoneFilled && openIfNeeded) {
+    const loginVisible = await namedControlVisible(target, [/^Giriş Yap$/i]);
+    if (!loginVisible) return null;
+    await setState("opening", "Portal oturumu için SMS doğrulaması hazırlanıyor");
+    if (!await clickNamedButton(target, [/^Giriş Yap$/i])) return null;
+    opened = true;
+    await page.waitForTimeout(700);
+    const activeTarget = await latestSessionTarget(page, target, portal);
+    loginTarget = await sessionDialogTarget(activeTarget);
+    otpInput = await findOtpInput(loginTarget);
+    if (!otpInput) phoneFilled = await fillSessionPhone(loginTarget, job.phone);
+  }
+
+  if (!otpInput) {
+    if (!phoneFilled) {
+      if (!opened) return null;
+      const text = await sessionTargetText(loginTarget, target);
+      return {
+        status: "auth_required",
+        message: /(ŞİFRE|PASSWORD|E-?POSTA)/i.test(text)
+          ? "Lion oturumu kullanıcı adı/şifre istiyor; portal oturumu bir kez manuel açılmalı"
+          : "Lion giriş penceresindeki telefon alanı eşleştirilemedi",
+        diagnostics: await pageProfile(loginTarget, page),
+      };
+    }
+    const sent = await clickNamedButton(loginTarget, [/Kod(?:u)? Gönder/i, /SMS Gönder/i, /Devam/i, /^Giriş Yap$/i]);
+    if (!sent) {
+      return { status: "mapping_required", message: "Lion SMS gönderme düğmesi eşleştirilemedi", diagnostics: await pageProfile(loginTarget, page) };
+    }
+    otpInput = await waitForSessionOtp(loginTarget, page);
+  }
+
+  const loginText = await sessionTargetText(loginTarget, target);
+  if (!otpInput) {
+    return { status: "auth_required", message: "Lion SMS kodu alanına geçemedi", diagnostics: await pageProfile(loginTarget, page) };
+  }
+
+  const code = await requestOtp();
+  await otpInput.fill(code, { timeout: 4000 });
+  if (!await clickNamedButton(loginTarget, [/Doğrula/i, /Onayla/i, /^Giriş Yap$/i, /Devam/i])) await otpInput.press("Enter").catch(() => {});
+  await page.waitForTimeout(1100);
+  const stillWaiting = await findOtpInput(loginTarget);
+  if (stillWaiting && SESSION_SMS_PATTERN.test(loginText)) {
+    return { status: "auth_required", message: "Lion SMS kodunu kabul etmedi; kodu ve süresini kontrol edin", diagnostics: await pageProfile(loginTarget, page) };
+  }
+  await setState("filling", "Lion oturumu açıldı; araç sorgusu hazırlanıyor");
+  return { handled: true };
+}
+
 function missingInputMessage(job) {
   const missing = [];
   if (!job.vehicle.registration) missing.push("ruhsat seri numarası");
@@ -152,16 +305,27 @@ async function waitForIhsanOutcome({ page, target, job, portal, resultTimeoutMs,
   let dynamicAttempted = false;
   let lastOffers = [];
   let lastOfferChangeAt = 0;
+  let sessionChallengeCompleted = false;
   while (Date.now() - startedAt < resultTimeoutMs) {
     if (isCancelled()) return { status: "cancelled", message: "Sorgu iptal edildi" };
     const text = await visibleText(target);
     if (BLOCK_PATTERN.test(text)) return { status: "access_blocked", message: "Portal güvenlik duvarı bu sunucunun erişimini engelledi" };
     if (await detectCaptcha(page, text)) return { status: "manual_required", message: "CAPTCHA / güvenlik kontrolü kullanıcı tarafından tamamlanmalı" };
+
+    if (!sessionChallengeCompleted) {
+      const sessionOutcome = await completeSessionLogin({ page, target, job, portal, requestOtp, setState, openIfNeeded: false });
+      if (sessionOutcome?.status) return sessionOutcome;
+      if (sessionOutcome?.handled) {
+        sessionChallengeCompleted = true;
+        await page.waitForTimeout(900);
+        continue;
+      }
+    }
     const detectedState = pageState(text);
     if (detectedState) return { status: detectedState, message: detectedState === "no_offer" ? "Portal teklif bulunamadığını bildirdi" : "Portal oturum veya hız sınırı bildirdi" };
 
     const otpInput = await findOtpInput(target);
-    const smsLanguage = /(SMS|TEK KULLANIMLIK|DOĞRULAMA KODU|ONAY KODU|CEP TELEFONUNUZA)/i.test(text);
+    const smsLanguage = SESSION_SMS_PATTERN.test(text);
     if (otpInput && smsLanguage) {
       if (job.mode === "no_sms") return { status: "skipped_sms", message: "SMS istendiği için atlandı" };
       const code = await requestOtp();
@@ -186,9 +350,21 @@ async function waitForIhsanOutcome({ page, target, job, portal, resultTimeoutMs,
     if (hasDynamicStep && !dynamicAttempted) {
       dynamicAttempted = true;
       await setState("filling", "Portalın istediği ek araç bilgileri dolduruluyor");
+      const revealed = await revealDynamicSection(target, page);
+      if (!revealed) {
+        return { status: "mapping_required", message: "Ekstra araç bilgileri bölümü açılamadı", diagnostics: await pageProfile(target, page) };
+      }
       const dynamic = await fillIhsanFields(target, job, { includeDynamic: true, page });
       const changed = ["vehicleType", "yearSelect", "brandSelect", "typeSelect", "yearInput", "chassis", "engine"]
         .some((key) => dynamic[key]);
+      const missingDynamic = await missingVisibleDynamicFields(target);
+      if (missingDynamic.length) {
+        return {
+          status: "input_required",
+          message: `Portalın ek araç alanları tamamlanamadı: ${missingDynamic.join(", ")}`,
+          diagnostics: await pageProfile(target, page),
+        };
+      }
       if (changed && await clickSubmit(target)) {
         await setState("submitted", "Ek araç bilgileri gönderildi; portal cevabı bekleniyor");
         await page.waitForTimeout(1200);
@@ -236,10 +412,12 @@ export class IhsanPortalAdapter {
     const firstText = await visibleText(page);
     if (BLOCK_PATTERN.test(firstText)) return { status: "access_blocked", message: "Portal güvenlik duvarı bu sunucunun erişimini engelledi" };
     if (await detectCaptcha(page, firstText)) return { status: "manual_required", message: "CAPTCHA / güvenlik kontrolü kullanıcı tarafından tamamlanmalı" };
-    const initialState = pageState(firstText);
-    if (initialState) return { status: initialState, message: initialState === "auth_required" ? "Portal oturumu açılmalı" : "Portal isteği kabul etmedi" };
-
     const target = await resolveTarget(page, portal);
+    const sessionOutcome = await completeSessionLogin({ page, target, job, portal, requestOtp, setState });
+    if (sessionOutcome?.status) return sessionOutcome;
+
+    const initialState = pageState(await visibleText(target));
+    if (initialState) return { status: initialState, message: initialState === "auth_required" ? "Portal oturumu açılmalı" : "Portal isteği kabul etmedi" };
     await setState("filling", "Kimlik, plaka ve ruhsat bilgileri dolduruluyor");
     const filled = await fillIhsanFields(target, job);
     const requiredFilled = filled.identity && filled.plate && filled.registration && (job.vehicle.identity.length !== 11 || filled.birthDate);
