@@ -24,6 +24,7 @@ export function normalizeVehicle(input = {}) {
     chassis: String(input.chassis || "").replace(/\s+/g, "").trim().toUpperCase().slice(0, 32),
     engine: String(input.engine || "").replace(/\s+/g, "").trim().toUpperCase().slice(0, 32),
     usageType: String(input.usageType || "").replace(/\s+/g, " ").trim().slice(0, 40),
+    registrationDate: String(input.registrationDate || "").trim().slice(0, 10),
   };
 }
 

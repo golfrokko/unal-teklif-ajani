@@ -3,6 +3,7 @@ T.C. / VKN: 12345678901
 Doğum Tarihi: 12.04.1988
 Plaka: 78 SR 283
 Ruhsat Seri No: AB123456
+Tescil Tarihi: 15.03.2008
 Araç: HYUNDAI ACCENT ERA 1.4
 Model Yılı: 2008
 Kullanım Tarzı: Hususi
@@ -37,7 +38,7 @@ const statusNames = {
 };
 
 const elements = Object.fromEntries([
-  "raw-data", "full-name", "identity", "birth-date", "plate", "registration", "vehicle", "year", "chassis", "engine", "usage-type",
+  "raw-data", "full-name", "identity", "birth-date", "plate", "registration", "registration-date", "vehicle", "year", "chassis", "engine", "usage-type",
   "phone", "email", "consent", "start-button", "parse-status", "portal-groups", "progress", "progress-list",
   "progress-title", "progress-subtitle", "job-status", "cancel-button", "log", "log-list", "log-count",
   "error-log", "error-log-list", "error-log-count", "session-check-status",
@@ -199,6 +200,7 @@ function parseVehicleData(raw) {
     birthDate: raw.match(/(?:doğum(?:\s+tarihi)?|dogum(?:\s+tarihi)?)[^0-9]*(\d{1,2}[./-]\d{1,2}[./-]\d{4})/i)?.[1] || "",
     plate: raw.match(/(?:plaka)[^A-ZÇĞİÖŞÜ0-9]*((?:0[1-9]|[1-7]\d|8[01])\s*[A-ZÇĞİÖŞÜ]{1,3}\s*\d{2,5})/i)?.[1]?.replace(/\s+/g, " ").toUpperCase() || "",
     registration: raw.match(/(?:ruhsat(?:\s+tescil)?(?:\s+seri)?(?:\s+belge)?(?:\s+no(?:su)?)?|tescil(?:\s+belge)?(?:\s+seri)?(?:\s+no(?:su)?)?|belge(?:\s+seri(?:\s+no)?)?)[^A-ZÇĞİÖŞÜ0-9]*([A-ZÇĞİÖŞÜ]{1,3}\s*\d{5,8})/i)?.[1]?.replace(/\s+/g, "").toUpperCase() || "",
+    registrationDate: raw.match(/(?:tescil\s*tarihi|ruhsat\s*tescil\s*tarihi|ruhsat\s*tarihi)[^0-9]*(\d{1,2}[./-]\d{1,2}[./-]\d{4})/i)?.[1] || "",
     vehicle: raw.match(/(?:araç|arac|marka\s*model)[^:\n]*:\s*([^\n]+)/i)?.[1]?.trim() || "",
     year: raw.match(/(?:model\s*yılı|model\s*yili|yıl|yil)[^0-9]*(19\d{2}|20\d{2})/i)?.[1] || "",
     chassis: raw.match(/(?:şasi|sasi)(?:\s+no|\s+numarası)?[^A-Z0-9]*([A-Z0-9]{8,20})/i)?.[1]?.toUpperCase() || "",
@@ -214,6 +216,7 @@ function setParsed(data) {
   elements["birth-date"].value = data.birthDate || "";
   elements.plate.value = data.plate || "";
   elements.registration.value = data.registration || "";
+  elements["registration-date"].value = data.registrationDate || "";
   elements.vehicle.value = data.vehicle || "";
   elements.year.value = data.year || "";
   elements.chassis.value = data.chassis || "";
@@ -231,6 +234,7 @@ function getVehicle() {
     birthDate: elements["birth-date"].value,
     plate: elements.plate.value,
     registration: elements.registration.value,
+    registrationDate: elements["registration-date"].value,
     vehicle: elements.vehicle.value,
     year: elements.year.value,
     chassis: elements.chassis.value,

@@ -20,7 +20,7 @@ export const portals = [
   portal({ id: "sigortammilli", name: "Sigortam Milli", url: "https://sigortammilli.com.tr/trafik-sigortasi/", adapter: "ihsan-frame", group: "İhsan altyapısı", verifiedForm: true, defaultEnabled: true, integrationStatus: "beta", smsPolicy: "session_once", smsEvidence: "Kullanıcı gözlemi: oturum açılırken bir kez SMS istiyor; açık oturum sonraki sorgularda kullanılabiliyor" }),
   // sigortam: Kullanıcı isteği (2026-08-22): sorgulama listesinden kaldırıldı.
   //portal({ id: "sigortam", name: "Sigortam.net", url: "https://www.sigortam.net/trafik-sigortasi", adapter: "generic", group: "Karşılaştırma sitesi", verifiedForm: true }),
-  portal({ id: "sigortabin", name: "SigortaBin", url: "https://www.sigortabin.com.tr/urunler/trafik-sigortasi", adapter: "generic", group: "Karşılaştırma sitesi", verifiedForm: true, otpTrigger: "after_phone_submit", smsPolicy: "per_query", fresh: true, smsEvidence: "Kullanıcı gözlemi: TC/telefon girildikten sonra SMS ile doğrulama isteniyor" }),
+  portal({ id: "sigortabin", name: "SigortaBin", url: "https://www.sigortabin.com.tr/urunler/trafik-sigortasi", adapter: "generic", group: "Karşılaştırma sitesi", verifiedForm: true, otpTrigger: "after_phone_submit", smsPolicy: "per_query", fresh: true, checkAllBoxes: true, smsEvidence: "Kullanıcı gözlemi: TC/telefon girildikten sonra SMS ile doğrulama isteniyor" }),
   portal({ id: "sigortaladim", name: "Sigortaladım", url: "https://www.sigortaladim.com/zorunlu-trafik-sigortasi", adapter: "generic", group: "Karşılaştırma sitesi", verifiedForm: true }),
   portal({ id: "polinet", name: "polinet", url: "https://polinetsigorta.com/zorunlu-trafik-sigortasi", adapter: "generic", group: "Karşılaştırma sitesi", verifiedForm: true }),
   portal({ id: "sigortakurdu", name: "sigortakurdu", url: "https://www.sigortakurdu.com.tr/offer-step/trafik-sigortasi", adapter: "generic", group: "Karşılaştırma sitesi", verifiedForm: true }),
@@ -29,11 +29,11 @@ export const portals = [
   portal({ id: "ibksigorta", name: "ibksigorta", url: "https://www.ibksigorta.com.tr/trafik-sigortasi-teklif-al.html", adapter: "generic", group: "Karşılaştırma sitesi", verifiedForm: true }),
   portal({ id: "emaxsigorta", name: "emaxsigorta", url: "https://www.emaxsigorta.com.tr/trafik-sigortasi-teklif-al", adapter: "generic", group: "Karşılaştırma sitesi", verifiedForm: true }),
   portal({ id: "pakasigorta", name: "pakasigorta", url: "https://pakasigorta.com/trafik-sigortasi/", adapter: "generic", group: "Karşılaştırma sitesi", verifiedForm: true }),
-  portal({ id: "koalay", name: "Koalay", url: "https://www.koalay.com/zorunlu-trafik-sigortasi", adapter: "generic", group: "Karşılaştırma sitesi", verifiedForm: true, defaultEnabled: true }),
+  portal({ id: "koalay", name: "Koalay", url: "https://www.koalay.com/zorunlu-trafik-sigortasi", adapter: "generic", group: "Karşılaştırma sitesi", verifiedForm: true, defaultEnabled: true, checkAllBoxes: true }),
   portal({ id: "enuygun", name: "Enuygun Sigorta", url: "https://www.enuygunsigorta.com/zorunlu-trafik-sigortasi/basvuru/?step=1", adapter: "generic", group: "Karşılaştırma sitesi", verifiedForm: true, defaultEnabled: true, otpTrigger: "after_phone_submit", smsPolicy: "per_query", smsEvidence: "Resmî trafik teklif formu: cep telefonu numarasına birazdan SMS ile doğrulama kodu iletileceğini açıkça belirtiyor" }),
-  portal({ id: "sigortambir", name: "Sigortambir", url: "https://www.sigortambir.com/zorunlu-trafik-sigortasi", adapter: "generic", group: "Karşılaştırma sitesi", verifiedForm: true, defaultEnabled: true }),
+  portal({ id: "sigortambir", name: "Sigortambir", url: "https://www.sigortambir.com/zorunlu-trafik-sigortasi", adapter: "generic", group: "Karşılaştırma sitesi", verifiedForm: true, defaultEnabled: true, fieldOrder: ["identity", "plate", "phone"] }),
   portal({ id: "sigorta7", name: "Sigorta7", url: "https://www.sigorta7.com/trafik-sigortasi", adapter: "generic", group: "Karşılaştırma sitesi", verifiedForm: true }),
-  portal({ id: "sigortayeri", name: "Sigorta Yeri", url: "https://www.sigortayeri.com/arac-sigortasi/trafik-sigortasi", adapter: "generic", group: "Karşılaştırma sitesi", verifiedForm: true, defaultEnabled: true }),
+  portal({ id: "sigortayeri", name: "Sigorta Yeri", url: "https://www.sigortayeri.com/arac-sigortasi/trafik-sigortasi", adapter: "generic", group: "Karşılaştırma sitesi", verifiedForm: true, defaultEnabled: true, fieldOrder: ["plate", "identity"], checkAllBoxes: true }),
   portal({ id: "sigortala", name: "Sigorta.la", url: "https://sigorta.la/page/trafik-sigortasi", adapter: "generic", group: "Karşılaştırma sitesi", verifiedForm: false, diagnosticState: "client_error", diagnosticMessage: "Portal sunucuda yalnız eksik uygulama kabuğu döndürüyor; teklif formu yüklenmiyor" }),
   portal({ id: "dijipol", name: "Dijipol", url: "https://www.dijipol.com/", adapter: "generic", group: "Karşılaştırma sitesi", verifiedForm: true, defaultEnabled: true }),
   portal({ id: "policekes", name: "PoliçeKes", url: "https://www.policekes.com/", adapter: "generic", group: "Karşılaştırma sitesi", verifiedForm: false, diagnosticState: "client_error", diagnosticMessage: "Portal sunucuda eksik uygulama kabuğu döndürüyor; teklif formu yüklenmiyor" }),
@@ -41,11 +41,8 @@ export const portals = [
   //portal({ id: "enpara", name: "Enpara Sigorta", url: "https://www.enpara.com/sigortalar/trafik-sigortasi", adapter: "generic", group: "Banka / platform", verifiedForm: false, diagnosticState: "auth_required", diagnosticMessage: "Teklif akışı Enpara müşteri girişi / mobil uygulama oturumu gerektiriyor" }),
   // hepiyi: Kullanıcı isteği (2026-08-22): sorgulama listesinden kaldırıldı.
   //portal({ id: "hepiyi", name: "Hepiyi", url: "https://hepiyi.com.tr/trafik-sigortasi/form/arac-bilgileri", adapter: "generic", group: "Sigorta şirketi", verifiedForm: true, requiredFields: ["email"], otpTrigger: "after_phone_submit", smsPolicy: "per_query", smsEvidence: "Resmî form, girilen cep telefonu numarasına onay kodu gönderileceğini ve e-posta adresinin zorunlu olduğunu belirtiyor" }),
-  // quick: CAPTCHA korumalı (Google reCAPTCHA). Otomatik/algoritmik çözüm hâlâ
-  // uygulanmıyor; artık CAPTCHA çıktığında sorgu duraklayıp kullanıcının canlı
-  // ekrana tıklayarak kendi çözmesine izin veren "waiting_captcha" akışı
-  // olduğundan bu portal tekrar etkinleştirildi.
-  portal({ id: "quick", name: "Quick Sigorta", url: "https://www.quicksigorta.com/uretim/trafik", adapter: "generic", group: "Sigorta şirketi", verifiedForm: false, smsEvidence: "Resmî üretim formu Google reCAPTCHA ile korunuyor; kullanıcı canlı ekrandan kendi çözüyor" }),
+  // quick: Kullanıcı isteği (2026-08-22): sorgulama listesinden tekrar kaldırıldı.
+  //portal({ id: "quick", name: "Quick Sigorta", url: "https://www.quicksigorta.com/uretim/trafik", adapter: "generic", group: "Sigorta şirketi", verifiedForm: false, smsEvidence: "Resmî üretim formu Google reCAPTCHA ile korunuyor; kullanıcı canlı ekrandan kendi çözüyor" }),
   // sompo: Kullanıcı isteği (2026-08-22): sorgulama listesinden kaldırıldı.
   //portal({ id: "sompo", name: "Sompo Sigorta", url: "https://www.somposigorta.com.tr/trafik-sigortasi", adapter: "generic", group: "Sigorta şirketi", verifiedForm: true }),
   // ethica: Kullanıcı isteği (2026-08-22): sorgulama listesinden kaldırıldı.
@@ -53,7 +50,7 @@ export const portals = [
 ];
 
 export const insurerAliases = [
-  ["AKSİGORTA", ["AKSİGORTA", "AK SIGORTA"]],
+  ["AKSİGORTA", ["AKSİGORTA", "AK SIGORTA", "AK"]],
   ["ALLIANZ", ["ALLIANZ"]],
   ["ANADOLU SİGORTA", ["ANADOLU SİGORTA", "ANADOLU SIGORTA"]],
   ["ANKARA SİGORTA", ["ANKARA SİGORTA", "ANKARA SIGORTA"]],
@@ -67,16 +64,16 @@ export const insurerAliases = [
   ["GENERALI", ["GENERALI"]],
   ["HDI SİGORTA", ["HDI SİGORTA", "HDI SIGORTA", "HDI"]],
   ["HEPİYİ SİGORTA", ["HEPİYİ", "HEPIYI"]],
-  ["KORU SİGORTA", ["KORU SİGORTA", "KORU SIGORTA"]],
+  ["KORU SİGORTA", ["KORU SİGORTA", "KORU SIGORTA", "KORU"]],
   ["MAGDEBURGER", ["MAGDEBURGER"]],
   ["MAPFRE SİGORTA", ["MAPFRE SİGORTA", "MAPFRE SIGORTA", "MAPFRE"]],
   ["NEOVA SİGORTA", ["NEOVA"]],
   ["ORİENT SİGORTA", ["ORIENT", "ORİENT"]],
   ["QUICK SİGORTA", ["QUICK"]],
-  ["RAY SİGORTA", ["RAY SİGORTA", "RAY SIGORTA"]],
+  ["RAY SİGORTA", ["RAY SİGORTA", "RAY SIGORTA", "RAY"]],
   ["SOMPO SİGORTA", ["SOMPO"]],
   ["TÜRK NİPPON", ["TÜRK NİPPON", "TURK NIPPON"]],
-  ["TÜRKİYE SİGORTA", ["TÜRKİYE SİGORTA", "TURKIYE SIGORTA"]],
+  ["TÜRKİYE SİGORTA", ["TÜRKİYE SİGORTA", "TURKIYE SIGORTA", "TÜRKİYE"]],
   ["UNICO SİGORTA", ["UNICO"]],
   ["ZURICH SİGORTA", ["ZURICH"]]
 ];

@@ -42,6 +42,28 @@ test("taksit bilgisi yoksa alanı hiç eklemez", () => {
   assert.equal(offers[0].installments, undefined);
 });
 
+test("kısa şirket kısaltmalarını (Ak, Ray, Koru) da yakalar", () => {
+  const offers = extractOffersFromText("Ak 18.117,00 ₺ Ray 27.894,40 ₺ Koru 34.688,00 ₺", portal);
+  assert.equal(offers.find((offer) => offer.company === "AKSİGORTA")?.price, 18117);
+  assert.equal(offers.find((offer) => offer.company === "RAY SİGORTA")?.price, 27894.40);
+  assert.equal(offers.find((offer) => offer.company === "KORU SİGORTA")?.price, 34688);
+});
+
+test("kısa kısaltmalar başka kelimenin içinde yanlışlıkla eşleşmez", () => {
+  const offers = extractOffersFromText("AKBANK üzerinden 950,00 TL ödeme yapabilirsiniz, Koruma paketi 1.200,00 TL", portal);
+  assert.equal(offers.find((offer) => offer.company === "AKSİGORTA"), undefined);
+  assert.equal(offers.find((offer) => offer.company === "KORU SİGORTA"), undefined);
+});
+
+test("oturum süresi dolmuş/hata ibaresi olan satırlarda uzak bir fiyatı yanlışlıkla eşleştirmez (Corpus tipi)", () => {
+  const offers = extractOffersFromText(
+    "Corpus Oturum süresi dolmuş veya geçersiz token Bereket 18.499,20 TL",
+    portal,
+  );
+  assert.equal(offers.find((offer) => offer.company === "CORPUS SİGORTA"), undefined);
+  assert.equal(offers.find((offer) => offer.company === "BEREKET SİGORTA")?.price, 18499.20);
+});
+
 test("aynı portal fiyatını tekilleştirip en iyi teklifi özetler", () => {
   const input = [
     { company: "ALLIANZ", price: 10000, sourcePortalId: "a" },

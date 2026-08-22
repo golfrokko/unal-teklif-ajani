@@ -84,6 +84,29 @@ export async function fillFirst(target, value, selectors, labelTerms) {
   return false;
 }
 
+// Bazı sitelerde canlı formun alanları isim/etiket olarak eşleşecek net bir
+// name/id/placeholder taşımıyor; kullanıcı bu durumda "ilk alan TC, ikinci
+// alan telefon" gibi sadece DOM SIRASINA göre tarif ediyor (ör. Polinet,
+// Dijipol, Bisigorta). Bu yardımcı, görünür metin girişlerini sırasıyla
+// dolduruyor; her değeri bir sonraki görünür (ve henüz boş) alana yazar.
+export async function fillVisibleInputsByOrder(target, values) {
+  const inputs = target.locator('input:not([type="hidden"]):not([type="checkbox"]):not([type="radio"]):not([type="submit"]):not([type="button"])');
+  const count = Math.min(await inputs.count().catch(() => 0), values.length + 10);
+  const filled = new Array(values.length).fill(false);
+  let valueIndex = 0;
+  for (let index = 0; index < count && valueIndex < values.length; index += 1) {
+    const input = inputs.nth(index);
+    if (!await input.isVisible({ timeout: 300 }).catch(() => false)) continue;
+    const existing = await input.inputValue({ timeout: 300 }).catch(() => "");
+    if (existing) continue;
+    if (!values[valueIndex]) { valueIndex += 1; continue; }
+    await fillHumanLike(input, values[valueIndex]);
+    filled[valueIndex] = true;
+    valueIndex += 1;
+  }
+  return filled;
+}
+
 export function splitFullName(fullName) {
   const parts = String(fullName || "").trim().split(/\s+/).filter(Boolean);
   if (!parts.length) return { first: "", last: "" };
@@ -172,6 +195,30 @@ export async function fillBirthDate(target, birthDate) {
   return fillFirst(target, birthDate, [], ["Doğum Tarihi"]);
 }
 
+export async function fillRegistrationDate(target, registrationDate) {
+  if (!registrationDate) return false;
+  const selectors = [
+    'input[name*="tescil" i][type="date"]', 'input[id*="tescil" i][type="date"]',
+    'input[name*="tescil" i]', 'input[id*="tescil" i]', 'input[placeholder*="tescil" i]',
+  ];
+  for (const selector of selectors) {
+    try {
+      const input = target.locator(selector).first();
+      if (!(await input.isVisible({ timeout: 400 }))) continue;
+      const meta = await input.evaluate((element) => ({
+        placeholder: element.getAttribute("placeholder") || "",
+        type: element.getAttribute("type") || "",
+      })).catch(() => ({}));
+      let value = registrationDate;
+      if (meta.type === "date") value = convertDateFormat(registrationDate, "yyyy-mm-dd");
+      else if (/^mm/i.test(meta.placeholder)) value = convertDateFormat(registrationDate, "mm/dd/yyyy");
+      await fillHumanLike(input, value);
+      return true;
+    } catch {}
+  }
+  return fillFirst(target, registrationDate, [], ["Tescil Tarihi", "Ruhsat Tescil Tarihi"]);
+}
+
 function splitRegistrationParts(registration) {
   const match = String(registration || "").match(/^([A-ZÇĞİÖŞÜ]+)(\d+)$/);
   if (!match) return { seri: registration, no: registration };
@@ -239,7 +286,7 @@ export async function fillSecondaryRegistrationFields(target, registration) {
 
 const CONSENT_TEXT_PATTERN = /(KVKK|AYDINLATMA|KULLANICI SÖZLEŞMESİ|ÜYELİK SÖZLEŞMESİ|GİZLİLİK SÖZLEŞMESİ|KİŞİSEL VERİ|AÇIK RIZA|ELEKTRONİK İLETİ|ONAY VERİYORUM|KABUL EDİYORUM|ŞARTLARI KABUL)/;
 
-export async function acceptRequiredConsents(target) {
+export async function acceptRequiredConsents(target, { checkAllBoxes = false } = {}) {
   const labels = target.locator("label");
   const labelCount = Math.min(await labels.count().catch(() => 0), 140);
   for (let index = 0; index < labelCount; index += 1) {
@@ -268,6 +315,7 @@ export async function acceptRequiredConsents(target) {
     const box = boxes.nth(index);
     if (!await box.isVisible({ timeout: 200 }).catch(() => false)) continue;
     if (await box.isChecked({ timeout: 200 }).catch(() => false)) continue;
+    if (checkAllBoxes) { await box.check({ force: true }).catch(() => {}); continue; }
     const nearbyText = await box.evaluate((element) => (element.closest("label, .form-check, .checkbox, li, div")?.innerText || "")
       .toLocaleUpperCase("tr-TR")).catch(() => "");
     if (CONSENT_TEXT_PATTERN.test(nearbyText)) await box.check({ force: true }).catch(() => {});
@@ -293,47 +341,95 @@ const PHONE_SELECTORS = [
 ];
 const PHONE_LABELS = ["GSM", "Cep Telefonu", "Telefon"];
 
-export async function fillQuoteForm(target, job) {
+// Alanların hangi sırayla doldurulacağı çoğu sitede önemsiz, ama bazı
+// siteler alanı sırayla açığa çıkarıyor/doğruluyor ve yanlış sırada
+// doldurulunca form takılabiliyor (ör. Sigortambir: TC, plaka, telefon;
+// Sigortayeri: plaka, TC). portal.fieldOrder bu adımların BİR KISMINI
+// (veya tamamını) öne alabilir; listelenmeyen adımlar varsayılan
+// sıralarında sona eklenir, hiçbir alan atlanmaz.
+const DEFAULT_FIELD_ORDER = ["identity", "birthDate", "plate", "registration", "phone", "chassis", "engine", "matbuVehicle", "registrationDate", "usageType", "occupation", "seatCount", "fuelType", "hasarsizlik", "nameEmail"];
+
+export async function fillQuoteForm(target, job, portal) {
   const vehicle = job.vehicle;
   const phone10 = job.phone.replace(/^0/, "");
   const filled = {};
-  filled.identity = await fillFirst(target, vehicle.identity,
-    ['input[name*="identity" i]', 'input[name*="kimlik" i]', 'input[name*="tc" i]', 'input[placeholder*="TC" i]', 'input[placeholder*="kimlik" i]'],
-    ["Kimlik Numarası", "TC Kimlik No", "TC/Vergi", "T.C. Kimlik", "TC Kimlik Numarası", "Vergi Kimlik No"]);
-  await humanPause();
-  filled.birthDate = await fillBirthDate(target, vehicle.birthDate);
-  await humanPause();
-  await ensurePlateAvailable(target);
-  filled.plate = await fillFirst(target, vehicle.plate,
-    ['input[name*="plate" i]', 'input[name*="plaka" i]', 'input[placeholder*="plaka" i]'], ["Plaka"]);
-  await humanPause();
-  filled.registration = (await fillSplitRegistrationIfPresent(target, vehicle.registration)) || (await fillFirst(target, vehicle.registration,
-    ['input[name*="registration" i]', 'input[name*="ruhsat" i]', 'input[name*="belge" i]', 'input[name*="tescil" i]', 'input[placeholder*="ruhsat" i]'],
-    ["Ruhsat Numarası", "Ruhsat Seri", "Belge Seri", "Ruhsat Tescil Belge Seri No", "Tescil Belge Seri No", "Ruhsat Seri No"]));
-  await fillSecondaryRegistrationFields(target, vehicle.registration);
-  await humanPause();
-  filled.phone = (await fillFirst(target, phone10, PHONE_SELECTORS, PHONE_LABELS)) || (await fillFirst(target, job.phone, PHONE_SELECTORS, PHONE_LABELS));
-  await humanPause();
-  filled.chassis = await fillFirst(target, vehicle.chassis,
-    ['input[name*="chassis" i]', 'input[name*="sasi" i]'], ["Şasi Numarası", "Şasi No"]);
-  filled.engine = await fillFirst(target, vehicle.engine,
-    ['input[name*="engine" i]', 'input[name*="motor" i]'], ["Motor Numarası", "Motor No"]);
-  await humanPause();
-  await fillMatbuVehicleFields(target, vehicle);
-  await humanPause();
-  filled.usageType = await fillFirst(target, vehicle.usageType,
-    ['select[name*="kullanim" i]', 'select[name*="usage" i]', 'select[name*="kullanımtarz" i]'],
-    ["Kullanım Tarzı", "Kullanım Şekli", "Araç Kullanım Tarzı"]);
-  await humanPause();
-  const hasarsizlikKademesi = job.capturedFacts?.hasarsizlikKademesi?.value;
-  if (hasarsizlikKademesi) {
-    filled.hasarsizlikKademesi = await fillFirst(target, hasarsizlikKademesi,
-      ['select[name*="hasarsizlik" i]', 'select[name*="kademe" i]', 'input[name*="hasarsizlik" i]', 'input[name*="kademe" i]'],
-      ["Hasarsızlık Kademesi", "Hasarsızlık Basamağı"]);
+
+  const steps = {
+    identity: async () => {
+      filled.identity = await fillFirst(target, vehicle.identity,
+        ['input[name*="identity" i]', 'input[name*="kimlik" i]', 'input[name*="tc" i]', 'input[placeholder*="TC" i]', 'input[placeholder*="kimlik" i]'],
+        ["Kimlik Numarası", "TC Kimlik No", "TC/Vergi", "T.C. Kimlik", "TC Kimlik Numarası", "Vergi Kimlik No"]);
+    },
+    birthDate: async () => { filled.birthDate = await fillBirthDate(target, vehicle.birthDate); },
+    plate: async () => {
+      await ensurePlateAvailable(target);
+      filled.plate = await fillFirst(target, vehicle.plate,
+        ['input[name*="plate" i]', 'input[name*="plaka" i]', 'input[placeholder*="plaka" i]'], ["Plaka"]);
+    },
+    registration: async () => {
+      filled.registration = (await fillSplitRegistrationIfPresent(target, vehicle.registration)) || (await fillFirst(target, vehicle.registration,
+        ['input[name*="registration" i]', 'input[name*="ruhsat" i]', 'input[name*="belge" i]', 'input[name*="tescil" i]', 'input[placeholder*="ruhsat" i]'],
+        ["Ruhsat Numarası", "Ruhsat Seri", "Belge Seri", "Ruhsat Tescil Belge Seri No", "Tescil Belge Seri No", "Ruhsat Seri No"]));
+      await fillSecondaryRegistrationFields(target, vehicle.registration);
+    },
+    phone: async () => {
+      filled.phone = (await fillFirst(target, phone10, PHONE_SELECTORS, PHONE_LABELS)) || (await fillFirst(target, job.phone, PHONE_SELECTORS, PHONE_LABELS));
+    },
+    chassis: async () => {
+      filled.chassis = await fillFirst(target, vehicle.chassis,
+        ['input[name*="chassis" i]', 'input[name*="sasi" i]'], ["Şasi Numarası", "Şasi No"]);
+    },
+    engine: async () => {
+      filled.engine = await fillFirst(target, vehicle.engine,
+        ['input[name*="engine" i]', 'input[name*="motor" i]'], ["Motor Numarası", "Motor No"]);
+    },
+    matbuVehicle: async () => { await fillMatbuVehicleFields(target, vehicle); },
+    registrationDate: async () => { filled.registrationDate = await fillRegistrationDate(target, vehicle.registrationDate); },
+    // Bazı sitelerde sigortalı bilgileri ekranında "Meslek" gibi elimizde
+    // hiç verisi olmayan bir çoktan seçmeli soruluyor (ör. Dijipol). Elimizde
+    // gerçek bir meslek bilgisi olmadığından güvenli/genel "Diğer"
+    // seçeneğini deniyoruz; alan yoksa no-op.
+    occupation: async () => {
+      filled.occupation = await fillFirst(target, "Diğer",
+        ['select[name*="meslek" i]', 'select[name*="occupation" i]'],
+        ["Meslek", "Mesleğiniz", "Meslek Bilgisi"]);
+    },
+    usageType: async () => {
+      filled.usageType = await fillFirst(target, vehicle.usageType,
+        ['select[name*="kullanim" i]', 'select[name*="usage" i]', 'select[name*="kullanımtarz" i]'],
+        ["Kullanım Tarzı", "Kullanım Şekli", "Araç Kullanım Tarzı"]);
+    },
+    hasarsizlik: async () => {
+      const hasarsizlikKademesi = job.capturedFacts?.hasarsizlikKademesi?.value;
+      if (!hasarsizlikKademesi) return;
+      filled.hasarsizlikKademesi = await fillFirst(target, hasarsizlikKademesi,
+        ['select[name*="hasarsizlik" i]', 'select[name*="kademe" i]', 'input[name*="hasarsizlik" i]', 'input[name*="kademe" i]'],
+        ["Hasarsızlık Kademesi", "Hasarsızlık Basamağı"]);
+    },
+    // Koltuk sayısı ve yakıt tipi de matbu/vehicle verimizde yok; kullanıcı
+    // gözlemine göre (ör. Bisigorta) koltuk sayısı her zaman "5", yakıt
+    // tipi "Benzin" seçilerek geçiliyor. Alan yoksa no-op.
+    seatCount: async () => {
+      filled.seatCount = await fillFirst(target, "5",
+        ['select[name*="koltuk" i]', 'select[name*="seat" i]', 'input[name*="koltuk" i]'],
+        ["Koltuk Sayısı", "Koltuk Adedi"]);
+    },
+    fuelType: async () => {
+      filled.fuelType = await fillFirst(target, "Benzin",
+        ['select[name*="yakit" i]', 'select[name*="fuel" i]'],
+        ["Yakıt Tipi", "Yakıt Türü"]);
+    },
+    nameEmail: async () => { await fillNameAndEmail(target, job); },
+  };
+
+  const customOrder = Array.isArray(portal?.fieldOrder) ? portal.fieldOrder : [];
+  const order = [...customOrder, ...DEFAULT_FIELD_ORDER.filter((step) => !customOrder.includes(step))];
+  for (const step of order) {
+    if (!steps[step]) continue;
+    await steps[step]();
     await humanPause();
   }
-  await fillNameAndEmail(target, job);
-  await acceptRequiredConsents(target);
+  await acceptRequiredConsents(target, { checkAllBoxes: portal?.checkAllBoxes === true });
   return filled;
 }
 
@@ -384,6 +480,19 @@ export async function clickSubmit(target) {
         await button.click({ timeout: 5000 });
         return true;
       }
+    } catch {}
+  }
+  // Bazı sitelerde "Devam Et" gibi düğmeler gerçek <button>/role="button"
+  // değil, tıklanabilir yapılmış düz <div>/<span> etiketleri; getByRole bu
+  // yüzden onları hiç bulamıyor (ekranda görünse ve scroll edilse bile).
+  // Son çare olarak tam metin eşleşmesiyle herhangi bir görünür elementi dene.
+  for (const name of [/^Devam Et$/i, /^Devam$/i, /^Gönder$/i, /^Onayla$/i, /^İleri$/i]) {
+    try {
+      const control = target.getByText(name, { exact: true }).first();
+      if (!await control.isVisible({ timeout: 400 }).catch(() => false)) continue;
+      await control.scrollIntoViewIfNeeded({ timeout: 2000 }).catch(() => {});
+      await control.click({ timeout: 5000 });
+      return true;
     } catch {}
   }
   return false;
@@ -484,7 +593,7 @@ export async function fillOtpCode(target, code) {
   return true;
 }
 
-async function formSignature(target) {
+export async function formSignature(target) {
   const controls = target.locator("input, select, textarea, button");
   const signature = await controls.evaluateAll((nodes) => nodes.filter((node) => {
     const style = window.getComputedStyle(node);
@@ -557,7 +666,7 @@ async function openQuoteFlow(target, page) {
 // gereksiz yere döngüye girebilir. Görüldüğünde sessizce kapatılır.
 const LEAD_CAPTURE_PATTERN = /(BENİ ARA|SİZİ ARAYALIM|GERİ ARAMA TALEBİ)/i;
 
-async function dismissLeadCaptureModal(target) {
+export async function dismissLeadCaptureModal(target) {
   const heading = target.getByText(LEAD_CAPTURE_PATTERN).first();
   if (!await heading.isVisible({ timeout: 250 }).catch(() => false)) return false;
   const dialog = target.locator('[role="dialog"], .modal, .modal-content, .popup').filter({ has: heading }).first();
@@ -641,6 +750,10 @@ export async function waitForOutcome({ page, target, job, portal, resultTimeoutM
         code = await requestOtp();
       }
       if (!await fillOtpCode(target, code)) return { status: "mapping_required", message: "SMS kodu alanı doldurulamadı" };
+      // Bazı sitelerde SMS kodu kutusunun altında ayrıca onaylanması gereken
+      // kutucuklar da oluyor (ör. Dijipol); "Onayla" tıklanmadan önce bunları
+      // da işaretlemeye çalış.
+      await acceptRequiredConsents(target, { checkAllBoxes: portal?.checkAllBoxes === true });
       if (!await clickSubmit(target)) await otpInput.press("Enter").catch(() => {});
       await track("collecting", "SMS doğrulandı; gerçek teklifler bekleniyor");
       await page.waitForTimeout(1200);
@@ -664,7 +777,7 @@ export async function waitForOutcome({ page, target, job, portal, resultTimeoutM
     const signature = await formSignature(target);
     if (signature !== "[]" && !attemptedStages.has(signature)) {
       attemptedStages.add(signature);
-      const filled = await fillQuoteForm(target, job);
+      const filled = await fillQuoteForm(target, job, portal);
       const filledCount = Object.values(filled).filter(Boolean).length;
       // Bazı adımlarda (ör. EGM/Tramer sorgu sonucu onay ekranı) doldurulacak
       // yeni bir alan olmaz, sadece "Devam" gibi bir düğme vardır; yine de
@@ -728,7 +841,7 @@ export class FormPortalAdapter {
       return { status: "mapping_required", message: "Portalın canlı teklif başlangıç formu bulunamadı", diagnostics: { fields: profile } };
     }
     await setState("filling", "Araç ve müşteri bilgileri dolduruluyor");
-    const filled = await fillQuoteForm(target, job);
+    const filled = await fillQuoteForm(target, job, portal);
     if (!filled.identity && !filled.plate && !filled.registration) return { status: "mapping_required", message: "İlk adımdaki kimlik, plaka veya ruhsat alanı eşleştirilemedi" };
     const attemptedStages = new Set([await formSignature(target)]);
     if (!await clickSubmit(target)) return { status: "mapping_required", message: "Sorgu düğmesi eşleştirilemedi" };

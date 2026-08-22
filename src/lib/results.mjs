@@ -34,6 +34,34 @@ function installmentFromSegment(segment, matchIndex) {
   return null;
 }
 
+// Bazı şirket satırları gerçek bir fiyat yerine hata/oturum durumu
+// gösteriyor (ör. "Oturum süresi dolmuş veya geçersiz token", "Hata id:
+// 999"). Böyle bir ibare şirket adıyla bulunan fiyat arasındaysa, o fiyat
+// aslında bu şirkete ait DEĞİLDİR (uzak bir komşu satırdan sızmış olabilir);
+// bu durumda teklifi hiç eklemiyoruz.
+const NO_OFFER_INDICATOR_PATTERN = /(OTURUM SÜRESİ DOLMUŞ|GEÇERSİZ TOKEN|SİSTEMDE BEKLENMEYEN|BEKLENMEYEN B[İI]R HATA|HATA\s*[İI]D|HATA\s*:|TEKL[İI]F VERMEYEN|REDDED[İI]LD[İI]|BAŞARISIZ)/;
+
+// Şirket adı çok kısaysa (ör. "AK", "RAY") ham metin taraması komşu bir
+// kelimenin İÇİNDE yanlışlıkla eşleşebilir (ör. "AKBANK" içindeki "AK").
+// 4 karakter ve altındaki takma adlar için, eşleşmenin her iki yanının da
+// harf/rakam OLMADIĞINI (yani gerçekten ayrı bir kelime olduğunu) doğruluyoruz.
+function isWordChar(character) {
+  return /[A-ZÇĞİÖŞÜ0-9]/.test(character || "");
+}
+
+function findAliasPositions(upper, alias) {
+  const positions = [];
+  const boundaryRequired = alias.length <= 4;
+  let index = upper.indexOf(alias);
+  while (index >= 0) {
+    if (!boundaryRequired || (!isWordChar(upper[index - 1]) && !isWordChar(upper[index + alias.length]))) {
+      positions.push(index);
+    }
+    index = upper.indexOf(alias, index + alias.length);
+  }
+  return positions;
+}
+
 export function extractOffersFromText(text, portal) {
   const upper = String(text).toLocaleUpperCase("tr-TR");
   const offers = [];
@@ -45,10 +73,8 @@ export function extractOffersFromText(text, portal) {
   const allPositions = [];
   for (const [company, aliases] of insurerAliases) {
     for (const alias of aliases) {
-      let index = upper.indexOf(alias);
-      while (index >= 0) {
-        allPositions.push({ company, position: index });
-        index = upper.indexOf(alias, index + alias.length);
+      for (const position of findAliasPositions(upper, alias)) {
+        allPositions.push({ company, position });
       }
     }
   }
@@ -56,8 +82,7 @@ export function extractOffersFromText(text, portal) {
 
   for (const [company, aliases] of insurerAliases) {
     const matches = aliases
-      .map((alias) => ({ alias, position: upper.indexOf(alias) }))
-      .filter((entry) => entry.position >= 0);
+      .flatMap((alias) => findAliasPositions(upper, alias).map((position) => ({ alias, position })));
     if (!matches.length) continue;
     const { alias: matchedAlias, position } = matches.reduce((best, entry) => (entry.position < best.position ? entry : best));
     const aliasEnd = position + matchedAlias.length;
@@ -85,6 +110,8 @@ export function extractOffersFromText(text, portal) {
       }
     }
     if (!chosen) continue;
+    const betweenNameAndPrice = segment.slice(Math.min(chosen.index, nameStartInSegment), Math.max(chosen.index, nameEndInSegment)).toLocaleUpperCase("tr-TR");
+    if (NO_OFFER_INDICATOR_PATTERN.test(betweenNameAndPrice)) continue;
     const price = priceFromMatch(chosen);
     if (!price) continue;
     const installments = installmentFromSegment(segment, chosen.index);

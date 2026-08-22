@@ -11,6 +11,7 @@ import {
   fillFirst,
   fillNameAndEmail,
   fillOtpCode,
+  fillRegistrationDate,
   fillSecondaryRegistrationFields,
   fillSplitRegistrationIfPresent,
   findOtpInput,
@@ -171,6 +172,8 @@ async function fillIhsanFields(target, job, { includeDynamic = false, page = nul
     ["Ruhsat Numarası", "Ruhsat Seri", "Belge Seri", "Ruhsat Tescil Belge Seri No", "Tescil Belge Seri No", "Ruhsat Seri No"]));
   await fillSecondaryRegistrationFields(target, vehicle.registration);
   await humanPause();
+  await fillRegistrationDate(target, vehicle.registrationDate);
+  await humanPause();
   await fillNameAndEmail(target, job);
 
   if (includeDynamic) {
@@ -275,6 +278,20 @@ async function sessionDialogTargetAnywhere(page, target) {
   return inTarget;
 }
 
+// Sorgu ilerlerken tanımadığımız bir Evet/Hayır onay penceresi çıkabiliyor
+// (ör. "Ek bir ürün eklemek ister misiniz?"). Bunu ne diye soracağını
+// bilmediğimizden güvenli varsayılan olan "Hayır" otomatik tıklanır; akış
+// kullanıcı müdahalesi beklemeden devam eder.
+async function dismissUnknownYesNoPopup(target) {
+  const dialog = await sessionDialogTarget(target);
+  if (dialog === target) return false;
+  const noButton = dialog.getByRole("button", { name: /^Hayır$/i }).first();
+  const hasYes = await namedControlVisible(dialog, [/^Evet$/i]);
+  if (!hasYes || !await noButton.isVisible({ timeout: 300 }).catch(() => false)) return false;
+  await noButton.click({ timeout: 3000 }).catch(() => {});
+  return true;
+}
+
 async function sessionTargetText(loginTarget, fallbackTarget) {
   if (loginTarget !== fallbackTarget) {
     const text = await loginTarget.innerText({ timeout: 3000 }).catch(() => "");
@@ -314,7 +331,7 @@ async function latestSessionTarget(page, target, portal) {
   return resolveTarget(latest, portal);
 }
 
-async function completeSessionLogin({ page, target, job, portal, requestOtp, setState, requestSmsSlot, requestCaptchaSolve, openIfNeeded = true }) {
+async function completeSessionLogin({ page, target, job, portal, requestOtp, setState, requestSmsSlot, openIfNeeded = true }) {
   if (portal.smsPolicy !== "session_once" || job.mode !== "ask_sms") return null;
   let loginTarget = await sessionDialogTargetAnywhere(page, target);
   let otpInput = await findOtpInput(loginTarget);
@@ -353,13 +370,8 @@ async function completeSessionLogin({ page, target, job, portal, requestOtp, set
         break;
       }
       if (await detectCaptcha(page, dialogText)) {
-        if (typeof requestCaptchaSolve !== "function") {
-          dialogBlocked = { status: "manual_required", message: "Giriş penceresinde CAPTCHA / güvenlik doğrulaması çıktı" };
-          break;
-        }
-        await requestCaptchaSolve();
-        await page.waitForTimeout(600);
-        continue;
+        dialogBlocked = { status: "manual_required", message: "Giriş penceresinde CAPTCHA / güvenlik doğrulaması çıktı" };
+        break;
       }
       otpInput = await findOtpInput(loginTarget);
       if (otpInput) break;
@@ -466,7 +478,7 @@ async function lookupOfferFromHistory({ page, target, job, portal }) {
   return offers.length ? offers : null;
 }
 
-async function waitForIhsanOutcome({ page, target, job, portal, resultTimeoutMs, historyLookupDelayMs, requestOtp, requestField, requestSmsSlot, requestCaptchaSolve, setState, isCancelled }) {
+async function waitForIhsanOutcome({ page, target, job, portal, resultTimeoutMs, historyLookupDelayMs, requestOtp, requestField, requestSmsSlot, setState, isCancelled }) {
   const startedAt = Date.now();
   let dynamicAttempted = false;
   let lastOffers = [];
@@ -479,20 +491,19 @@ async function waitForIhsanOutcome({ page, target, job, portal, resultTimeoutMs,
   };
   while (Date.now() - startedAt < resultTimeoutMs) {
     if (isCancelled()) return { status: "cancelled", message: "Sorgu iptal edildi" };
+    if (await dismissUnknownYesNoPopup(target)) {
+      await page.waitForTimeout(500);
+      continue;
+    }
     const text = await visibleText(target);
     captureSharedFacts(job, text);
     if (BLOCK_PATTERN.test(text)) return { status: "access_blocked", message: "Portal güvenlik duvarı bu sunucunun erişimini engelledi" };
     if (await detectCaptcha(page, text)) {
-      if (typeof requestCaptchaSolve !== "function") {
-        return { status: "manual_required", message: "CAPTCHA / güvenlik kontrolü kullanıcı tarafından tamamlanmalı" };
-      }
-      await requestCaptchaSolve();
-      await page.waitForTimeout(600);
-      continue;
+      return { status: "manual_required", message: "CAPTCHA / güvenlik kontrolü kullanıcı tarafından tamamlanmalı" };
     }
 
     if (!sessionChallengeCompleted) {
-      const sessionOutcome = await completeSessionLogin({ page, target, job, portal, requestOtp, requestSmsSlot, requestCaptchaSolve, setState: track, openIfNeeded: true });
+      const sessionOutcome = await completeSessionLogin({ page, target, job, portal, requestOtp, requestSmsSlot, setState: track, openIfNeeded: true });
       if (sessionOutcome?.status) return sessionOutcome;
       if (sessionOutcome?.handled) {
         sessionChallengeCompleted = true;
@@ -531,7 +542,16 @@ async function waitForIhsanOutcome({ page, target, job, portal, resultTimeoutMs,
       await track("filling", "Portalın istediği ek araç bilgileri dolduruluyor");
       const revealed = await revealDynamicSection(target, page);
       if (!revealed) {
-        return { status: "mapping_required", message: "Ekstra araç bilgileri bölümü açılamadı", diagnostics: await pageProfile(target, page) };
+        // "Ekstra Bilgiler" etiketi sayfada görünse bile bazen aslında
+        // doldurulacak aktif bir alan kalmamış oluyor (ör. teklifler zaten
+        // oluşmaya başlamış). Elimizde teklif varsa (Lion'da rapor edilen
+        // durum) akışı burada KESMEYELİM; gerçekten hiç teklif yoksa
+        // eskisi gibi hata döndürülür.
+        if (!offers.length && !lastOffers.length) {
+          return { status: "mapping_required", message: "Ekstra araç bilgileri bölümü açılamadı", diagnostics: await pageProfile(target, page) };
+        }
+        await page.waitForTimeout(1200);
+        continue;
       }
       const dynamic = await fillIhsanFields(target, job, { includeDynamic: true, page });
       let changed = ["vehicleType", "yearSelect", "brandSelect", "typeSelect", "yearInput", "chassis", "engine"]
@@ -633,19 +653,31 @@ export class IhsanPortalAdapter {
   async checkSession({ page, portal, navigationTimeoutMs }) {
     if (portal.smsPolicy !== "session_once") return { loggedIn: null, message: "Bu portal için oturum kavramı yok" };
     await page.goto(portal.url, { waitUntil: "domcontentloaded", timeout: navigationTimeoutMs });
-    await page.waitForTimeout(700);
+    // Not: sayfa render'ı bazı portallarda geç tamamlanabiliyor; "Giriş Yap"
+    // düğmesi henüz DOM'a gelmeden kontrol edilirse yanlışlıkla "oturum
+    // açık" sanılabiliyordu. completeSessionLogin'deki gerçek sorgu akışıyla
+    // aynı bekleme/iframe-tarama mantığını (sessionDialogTargetAnywhere)
+    // kullanıyoruz ki iki kontrol birbirinden farklı sonuç vermesin.
+    await page.waitForTimeout(1200);
     const text = await visibleText(page);
     if (BLOCK_PATTERN.test(text)) return { loggedIn: null, message: "Güvenlik duvarı erişimi engelledi" };
     if (await detectCaptcha(page, text)) return { loggedIn: null, message: "Güvenlik doğrulaması gerekiyor" };
     const target = await resolveTarget(page, portal);
-    const loginVisible = await namedControlVisible(target, [/^Giriş Yap$/i]);
+    const scannedTarget = await sessionDialogTargetAnywhere(page, target);
+    // Bazı sitelerde "Giriş Yap" üst menüde oturum durumundan bağımsız
+    // sabit bir gezinme bağlantısı olabiliyor; bu durumda yokluğuna
+    // güvenmek yanlış "girişli değil" sonucu verebiliyor. "Çıkış Yap" /
+    // "Hesabım" gibi net bir oturum-açık işareti varsa buna öncelik ver.
+    const loggedInSignal = await namedControlVisible(scannedTarget, [/^Çıkış Yap$/i, /^Oturumu Kapat$/i, /^Hesabım$/i]);
+    if (loggedInSignal) return { loggedIn: true, message: "Oturum açık görünüyor (hesap/çıkış bağlantısı görüldü)" };
+    const loginVisible = await namedControlVisible(scannedTarget, [/^Giriş Yap$/i]);
     return loginVisible
       ? { loggedIn: false, message: "Giriş yapılmamış; sorguda SMS istenecek" }
       : { loggedIn: true, message: "Oturum açık görünüyor" };
   }
 
   async run(context) {
-    const { page, portal, job, navigationTimeoutMs, resultTimeoutMs, historyLookupDelayMs, setState, requestOtp, requestField, requestSmsSlot, requestCaptchaSolve, isCancelled } = context;
+    const { page, portal, job, navigationTimeoutMs, resultTimeoutMs, historyLookupDelayMs, setState, requestOtp, requestField, requestSmsSlot, isCancelled } = context;
     const missing = missingInputMessage(job);
     if (missing) return { status: "input_required", message: missing };
     await setState("opening", "İhsan portalı açılıyor");
@@ -653,15 +685,15 @@ export class IhsanPortalAdapter {
     await page.waitForTimeout(900);
     if (isCancelled()) return { status: "cancelled", message: "Sorgu iptal edildi" };
 
-    let firstText = await visibleText(page);
+    // Not: İhsan altyapısı paylaşımlı bir arka uç kullanıyor ve gerçek
+    // CAPTCHA göstermiyor; bu yüzden burada canlı CAPTCHA-çözüm akışı
+    // uygulanmıyor (yalnız genel karşılaştırma sitelerinde var, bkz.
+    // form-adapter.mjs). Yine de CAPTCHA benzeri bir engel görülürse akış
+    // güvenli şekilde manuel gerekiyor olarak işaretlenir.
+    const firstText = await visibleText(page);
     if (BLOCK_PATTERN.test(firstText)) return { status: "access_blocked", message: "Portal güvenlik duvarı bu sunucunun erişimini engelledi" };
-    for (let attempt = 0; await detectCaptcha(page, firstText); attempt += 1) {
-      if (typeof requestCaptchaSolve !== "function" || attempt >= 5) {
-        return { status: "manual_required", message: "CAPTCHA / güvenlik kontrolü kullanıcı tarafından tamamlanmalı" };
-      }
-      await requestCaptchaSolve();
-      if (isCancelled()) return { status: "cancelled", message: "Sorgu iptal edildi" };
-      firstText = await visibleText(page);
+    if (await detectCaptcha(page, firstText)) {
+      return { status: "manual_required", message: "CAPTCHA / güvenlik kontrolü kullanıcı tarafından tamamlanmalı" };
     }
     const target = await resolveTarget(page, portal);
     const initialState = pageState(await visibleText(target));
@@ -677,6 +709,6 @@ export class IhsanPortalAdapter {
     if (!await clickSubmit(target)) return { status: "mapping_required", message: "İhsan formunun Gönder düğmesi eşleştirilemedi", diagnostics: await pageProfile(target, page) };
 
     await setState("submitted", "İlk form gönderildi; portalın cevabı doğrulanıyor");
-    return waitForIhsanOutcome({ page, target, job, portal, resultTimeoutMs, historyLookupDelayMs, requestOtp, requestField, requestSmsSlot, requestCaptchaSolve, setState, isCancelled });
+    return waitForIhsanOutcome({ page, target, job, portal, resultTimeoutMs, historyLookupDelayMs, requestOtp, requestField, requestSmsSlot, setState, isCancelled });
   }
 }
