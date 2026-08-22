@@ -5,6 +5,37 @@ function escapeRegex(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+// ÖNEMLİ: JS regex'in /i (case-insensitive) bayrağı Türkçe İ/ı/i/I harflerini
+// birbirine KATLAMAZ (standart Unicode büyük/küçük harf dönüşümü Türkçe'ye
+// özgü değildir). Yani örn. pattern'de "AYDINLATMA" (düz I ile) yazıp sayfa
+// metninde gerçek Türkçe "Aydınlatma" (noktasız ı ile) aranırsa /i bayrağıyla
+// bile EŞLEŞMEZ; aynı şekilde "İSTEK" (noktalı İ) düz "istek" ile eşleşmez.
+// Bu yüzden Türkçe metin desenleri iki kural izlemeli: (1) metni ÖNCE
+// toLocaleUpperCase("tr-TR") ile Türkçe kurallarına göre büyült (ı->I,
+// i->İ), (2) pattern'i BÜYÜK HARF ve /i bayrağı OLMADAN, bu dönüşümle
+// tutarlı yaz. trTest() bunu tek adımda yapar.
+export function trUpper(text) {
+  return String(text ?? "").toLocaleUpperCase("tr-TR");
+}
+
+export function trTest(pattern, text) {
+  return pattern.test(trUpper(text));
+}
+
+// Playwright locator'ları (getByText/getByRole name) doğrudan regex bekler;
+// bu durumlarda metni önceden büyültemediğimiz için pattern'in KENDİSİ her
+// i/I/ı/İ konumunda dört varyantı da kabul etmeli. turkishFoldPattern(word)
+// bunu elle harf harf denemek yerine otomatik/güvenli şekilde üretir.
+export function turkishFoldPattern(phrase) {
+  return phrase.split("").map((character) => (
+    "iİıI".includes(character) ? "[iİıI]" : escapeRegex(character)
+  )).join("");
+}
+
+export function turkishFoldRegex(phrase, flags = "i") {
+  return new RegExp(turkishFoldPattern(phrase), flags);
+}
+
 function valuesEffectivelyMatch(actual, expected) {
   const a = String(actual || "");
   const e = String(expected || "");
@@ -129,6 +160,24 @@ export async function fillNameAndEmail(target, job) {
     filledLast = await fillFirst(target, last,
       ['input[name*="lastname" i]', 'input[name*="soyad" i]', 'input[id*="soyad" i]', 'input[placeholder*="soyadınız" i]'],
       ["Soyadınız", "Soyadı"]);
+    // Bazı sitelerde alan etiketi yalnızca çıplak "Ad" / "Soyad" (ör.
+    // Enuygun). "Ad" gibi kısa bir etiketi substring eşleştirmesiyle aramak
+    // "Adres" gibi alakasız alanları da yakalayabileceğinden, burada
+    // yalnızca TAM eşleşen etiketle (getByLabel exact) deniyoruz.
+    if (!filledFirst) {
+      const adField = target.getByLabel(/^Ad[ıi]?$/i, { exact: true }).first();
+      if (await adField.isVisible({ timeout: 300 }).catch(() => false)) {
+        await fillHumanLike(adField, first);
+        filledFirst = true;
+      }
+    }
+    if (!filledLast) {
+      const soyadField = target.getByLabel(/^Soyad[ıi]?$/i, { exact: true }).first();
+      if (await soyadField.isVisible({ timeout: 300 }).catch(() => false)) {
+        await fillHumanLike(soyadField, last);
+        filledLast = true;
+      }
+    }
   }
   const filledEmail = await fillFirst(target, job.email,
     ['input[type="email"]', 'input[name*="email" i]', 'input[name*="eposta" i]', 'input[name*="e_posta" i]', 'input[placeholder*="e-posta" i]', 'input[placeholder*="eposta" i]'],
@@ -448,10 +497,16 @@ async function waitUntilEnabled(locator, timeoutMs) {
 // DOM sırasına göre yanlışlıkla kısayol tıklanabiliyor. Bu yüzden eşleşen
 // düğmeler arasında "hızlı/ekspres" içermeyeni önceliklendiriyoruz; asıl
 // düğme yoksa son çare olarak kısayola geri dönüyoruz.
-const SHORTCUT_BUTTON_PATTERN = /hızlı|quick|express|ekspres/i;
+const SHORTCUT_BUTTON_PATTERN = new RegExp(`(${turkishFoldPattern("hızlı")}|quick|express|ekspres)`, "i");
+
+const SUBMIT_BUTTON_NAMES = [
+  "Gönder", "Teklif Al", "Teklifi Al", "Sorgula", "Devam", "Hemen Teklif", "Doğrula", "Onayla",
+  "Fiyat Gör", "Fiyatları Gör", "Fiyat Getir", "Fiyatları Getir", "Fiyat Hesapla", "Fiyatları Hesapla",
+  "Karşılaştır", "Teklifleri Görüntüle", "Devam Et", "İleri", "Hesapla",
+].map((phrase) => turkishFoldRegex(phrase));
 
 export async function clickSubmit(target) {
-  for (const name of [/Gönder/i, /Teklif(?:i)? Al/i, /Sorgula/i, /Devam/i, /Hemen Teklif/i, /Doğrula/i, /Onayla/i, /Fiyat(?:ları)? (?:Gör|Getir|Hesapla)/i, /Karşılaştır/i, /Teklifleri Görüntüle/i, /Devam Et/i, /İleri/i, /Hesapla/i]) {
+  for (const name of SUBMIT_BUTTON_NAMES) {
     try {
       const candidates = target.getByRole("button", { name });
       const count = Math.min(await candidates.count().catch(() => 0), 6);
@@ -486,7 +541,7 @@ export async function clickSubmit(target) {
   // değil, tıklanabilir yapılmış düz <div>/<span> etiketleri; getByRole bu
   // yüzden onları hiç bulamıyor (ekranda görünse ve scroll edilse bile).
   // Son çare olarak tam metin eşleşmesiyle herhangi bir görünür elementi dene.
-  for (const name of [/^Devam Et$/i, /^Devam$/i, /^Gönder$/i, /^Onayla$/i, /^İleri$/i]) {
+  for (const name of [/^Devam Et$/i, /^Devam$/i, /^Gönder$/i, /^Onayla$/i, new RegExp(`^${turkishFoldPattern("İleri")}$`, "i")]) {
     try {
       const control = target.getByText(name, { exact: true }).first();
       if (!await control.isVisible({ timeout: 400 }).catch(() => false)) continue;
@@ -539,9 +594,25 @@ export async function visibleText(target) {
   return (await target.locator("body").innerText({ timeout: 3000 }).catch(() => "")).slice(0, 300000);
 }
 
+const CAPTCHA_TEXT_PATTERN = new RegExp(
+  `(VERIFY YOU ARE HUMAN|${turkishFoldPattern("İNSAN OLDUĞUNUZU DOĞRULAYIN")}|${turkishFoldPattern("ROBOT OLMADIĞINIZI")}|${turkishFoldPattern("GÜVENLİK KONTROLÜ")}|CHECKING YOUR BROWSER)`,
+  "i",
+);
+
 export async function detectCaptcha(page, text) {
-  if (/(VERIFY YOU ARE HUMAN|İNSAN OLDUĞUNUZU DOĞRULAYIN|ROBOT OLMADIĞINIZI|GÜVENLİK KONTROLÜ|CHECKING YOUR BROWSER)/i.test(text)) return true;
-  return (await page.locator('iframe[src*="recaptcha" i], iframe[src*="hcaptcha" i], [class*="captcha" i], [id*="captcha" i]').count()) > 0;
+  if (CAPTCHA_TEXT_PATTERN.test(text)) return true;
+  // Not: birçok site, kullanıcıya hiç görünmeyen (invisible reCAPTCHA v3
+  // rozeti, arka planda çalışan gizli container gibi) bir CAPTCHA elementini
+  // HER sayfada boilerplate olarak DOM'da tutuyor. Yalnızca eleman VAR mı
+  // diye bakmak (görünürlüğe bakmadan) SMS kodu ekranı gibi alakasız
+  // ekranları da yanlışlıkla CAPTCHA sanıyordu (ör. Koalay). Gerçek bir
+  // CAPTCHA'nın kullanıcıya GÖRÜNÜR olması gerekir.
+  const candidates = page.locator('iframe[src*="recaptcha" i], iframe[src*="hcaptcha" i], [class*="captcha" i], [id*="captcha" i]');
+  const count = Math.min(await candidates.count().catch(() => 0), 10);
+  for (let index = 0; index < count; index += 1) {
+    if (await candidates.nth(index).isVisible({ timeout: 200 }).catch(() => false)) return true;
+  }
+  return false;
 }
 
 export async function findOtpInput(target) {
@@ -642,14 +713,17 @@ async function openQuoteFlow(target, page) {
     // "Bir sigorta seç" gibi ürün seçim menülerinde önce en spesifik/kısa
     // eşleşmeyi (tam "Trafik Sigortası" satırı) dene; bu, uzun tanıtım
     // metinlerindeki "... Teklif Al" gibi genel ifadelerden önce gelmeli.
-    const selectedCategory = await clickNamedButton(target, [/^Zorunlu Trafik Sigortası$/i, /^Trafik Sigortası$/i], { maxTextLength: 32 });
-    const dismissed = selectedCategory || await clickNamedButton(target, [/Şimdi Değil/i, /Vazgeç/i, /Daha Sonra/i, /Atla/i, /Kapat/i]);
+    const selectedCategory = await clickNamedButton(target, [
+      new RegExp(`^${turkishFoldPattern("Zorunlu Trafik Sigortası")}$`, "i"),
+      new RegExp(`^${turkishFoldPattern("Trafik Sigortası")}$`, "i"),
+    ], { maxTextLength: 32 });
+    const dismissed = selectedCategory || await clickNamedButton(target, [turkishFoldRegex("Şimdi Değil"), /Vazgeç/i, /Daha Sonra/i, /Atla/i, /Kapat/i]);
     const opened = dismissed || await clickNamedButton(target, [
-      /Trafik Sigortası Teklif/i,
-      /Trafik Teklifi/i,
-      /Teklif Al/i,
-      /Hemen Teklif/i,
-      /Fiyat Al/i,
+      turkishFoldRegex("Trafik Sigortası Teklif"),
+      turkishFoldRegex("Trafik Teklifi"),
+      turkishFoldRegex("Teklif Al"),
+      turkishFoldRegex("Hemen Teklif"),
+      turkishFoldRegex("Fiyat Al"),
       /Sorgula/i,
     ]);
     if (!opened) return profile;
@@ -664,7 +738,10 @@ async function openQuoteFlow(target, page) {
 // kapatılmazsa hem müşterinin telefon numarası yanlışlıkla o forma
 // yazılabilir hem de sürekli değişen içeriği "yeni adım" sanılıp akış
 // gereksiz yere döngüye girebilir. Görüldüğünde sessizce kapatılır.
-const LEAD_CAPTURE_PATTERN = /(BENİ ARA|SİZİ ARAYALIM|GERİ ARAMA TALEBİ)/i;
+const LEAD_CAPTURE_PATTERN = new RegExp(
+  `(${turkishFoldPattern("BENİ ARA")}|${turkishFoldPattern("SİZİ ARAYALIM")}|${turkishFoldPattern("GERİ ARAMA TALEBİ")})`,
+  "i",
+);
 
 export async function dismissLeadCaptureModal(target) {
   const heading = target.getByText(LEAD_CAPTURE_PATTERN).first();
@@ -704,11 +781,38 @@ export function captureSharedFacts(job, text) {
   job.capturedFacts.hasarsizlikKademesi = { value: match[1], capturedAt: new Date().toISOString() };
 }
 
+function foldAnyPattern(phrases) {
+  return new RegExp(`(${phrases.map(turkishFoldPattern).join("|")})`, "i");
+}
+
+const RATE_LIMITED_PATTERN = foldAnyPattern(["ÇOK FAZLA İSTEK", "TOO MANY REQUESTS", "RATE LIMIT", "429"]);
+const AUTH_LOGIN_PATTERN = foldAnyPattern(["GİRİŞ YAP", "OTURUM AÇ", "KULLANICI ADI", "ACENTE GİRİŞİ"]);
+const AUTH_PASSWORD_PATTERN = foldAnyPattern(["ŞİFRE", "PASSWORD"]);
+const NO_OFFER_PATTERN = foldAnyPattern(["TEKLİF BULUNAMADI", "UYGUN TEKLİF YOK", "FİYAT ALINAMADI", "SONUÇ BULUNAMADI"]);
+const SMS_LANGUAGE_PATTERN = foldAnyPattern(["SMS", "TEK KULLANIMLIK", "DOĞRULAMA KODU", "ONAY KODU", "CEP TELEFONUNUZA"]);
+const RESULT_PROGRESS_PATTERN = foldAnyPattern(["TEKLİF SONUÇLARI", "TEKLİFLER SORGULANIYOR", "SORGULAMA DURUMU", "FİYATLAR HAZIRLANIYOR"]);
+
 export function pageState(text) {
-  if (/(ÇOK FAZLA İSTEK|TOO MANY REQUESTS|RATE LIMIT|429)/i.test(text)) return "rate_limited";
-  if (/(GİRİŞ YAP|OTURUM AÇ|KULLANICI ADI|ACENTE GİRİŞİ)/i.test(text) && /(ŞİFRE|PASSWORD)/i.test(text)) return "auth_required";
-  if (/(TEKLİF BULUNAMADI|UYGUN TEKLİF YOK|FİYAT ALINAMADI|SONUÇ BULUNAMADI)/i.test(text)) return "no_offer";
+  if (RATE_LIMITED_PATTERN.test(text)) return "rate_limited";
+  if (AUTH_LOGIN_PATTERN.test(text) && AUTH_PASSWORD_PATTERN.test(text)) return "auth_required";
+  if (NO_OFFER_PATTERN.test(text)) return "no_offer";
   return null;
+}
+
+// Bazı sitelerde bir sonraki adım (ör. "Sigortalı Bilgileri") DOM'a önceden
+// yerleşmiş, yalnızca bir akordeon/adım geçişiyle görünür hale geliyor;
+// formSignature() görünürlüğü computed style üzerinden ölçtüğü için bu
+// durumda imza baştan beri AYNI kalabiliyor ve attemptedStages onu "zaten
+// dolduruldu" sanıp bir daha denemiyor — TC/Ad Soyad/telefon gibi alanlar
+// boş kalıyor. Bu yüzden imza daha önce görülmüş olsa bile, kimlik alanı
+// görünür ve hâlâ boşsa yeniden dolduruluyor.
+async function hasEmptyIdentityField(target) {
+  const input = await locateVisibleField(target,
+    ['input[name*="identity" i]', 'input[name*="kimlik" i]', 'input[name*="tc" i]', 'input[placeholder*="TC" i]', 'input[placeholder*="kimlik" i]'],
+    ["Kimlik Numarası", "TC Kimlik No", "TC/Vergi", "T.C. Kimlik", "TC Kimlik Numarası", "Vergi Kimlik No"]);
+  if (!input) return false;
+  const value = await input.inputValue({ timeout: 300 }).catch(() => "");
+  return !String(value || "").trim();
 }
 
 export async function waitForOutcome({ page, target, job, portal, resultTimeoutMs, requestOtp, requestCaptchaSolve, setState, isCancelled, attemptedStages = new Set() }) {
@@ -728,6 +832,15 @@ export async function waitForOutcome({ page, target, job, portal, resultTimeoutM
     }
     const text = await visibleText(target);
     captureSharedFacts(job, text);
+    // Bazı sitelerde SMS/doğrulama servisi geçici olarak yanıt vermiyor
+    // (ör. SigortaBin: "SMS servisi şu anda yanıt vermiyor. Lütfen tekrar
+    // deneyin."). Bu, kalıcı bir eşleme sorunu değil geçici bir arıza
+    // olduğundan, sessizce zaman aşımına düşmek yerine hata fırlatıp
+    // motorun mevcut yeniden deneme mekanizmasına (yeni, temiz bir
+    // tarayıcı bağlamıyla) devrediyoruz.
+    if (/SMS SERV[İIıi]S[İIıi].{0,20}YAN[İIıi]T VERM[İIıi]YOR/i.test(text)) {
+      throw new Error("Portal SMS servisi geçici olarak yanıt vermiyor (Timeout)");
+    }
     if (await detectCaptcha(page, text)) {
       if (typeof requestCaptchaSolve !== "function") {
         return { status: "manual_required", message: "CAPTCHA / güvenlik kontrolü kullanıcı tarafından tamamlanmalı" };
@@ -740,7 +853,7 @@ export async function waitForOutcome({ page, target, job, portal, resultTimeoutM
     if (detectedState) return { status: detectedState, message: detectedState === "no_offer" ? "Portal teklif bulunamadığını bildirdi" : "Portal oturum veya hız sınırı bildirdi" };
 
     const otpInput = await findOtpInput(target);
-    const smsLanguage = /(SMS|TEK KULLANIMLIK|DOĞRULAMA KODU|ONAY KODU|CEP TELEFONUNUZA)/i.test(text);
+    const smsLanguage = SMS_LANGUAGE_PATTERN.test(text);
     if (otpInput && smsLanguage) {
       if (job.mode === "no_sms") return { status: "skipped_sms", message: "SMS istendiği için atlandı" };
       let code = await requestOtp();
@@ -770,12 +883,14 @@ export async function waitForOutcome({ page, target, job, portal, resultTimeoutM
       }
       if (Date.now() - lastOfferChangeAt >= 8000) return { status: "completed", message: `${offers.length} şirket teklifi alındı`, offers };
     }
-    if (/(TEKLİF SONUÇLARI|TEKLİFLER SORGULANIYOR|SORGULAMA DURUMU|FİYATLAR HAZIRLANIYOR)/i.test(text)) {
+    if (RESULT_PROGRESS_PATTERN.test(text)) {
       await track("collecting", "Sigorta şirketlerinden fiyat bekleniyor");
     }
 
     const signature = await formSignature(target);
-    if (signature !== "[]" && !attemptedStages.has(signature)) {
+    const seenBefore = attemptedStages.has(signature);
+    const needsRefill = seenBefore && await hasEmptyIdentityField(target);
+    if (signature !== "[]" && (!seenBefore || needsRefill)) {
       attemptedStages.add(signature);
       const filled = await fillQuoteForm(target, job, portal);
       const filledCount = Object.values(filled).filter(Boolean).length;

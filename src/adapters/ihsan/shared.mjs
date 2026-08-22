@@ -18,13 +18,27 @@ import {
   humanPause,
   pageState,
   resolveTarget,
+  turkishFoldPattern,
+  turkishFoldRegex,
   visibleText,
 } from "../form-adapter.mjs";
 
-const BLOCK_PATTERN = /(SORRY, YOU HAVE BEEN BLOCKED|YOU ARE UNABLE TO ACCESS|ACCESS DENIED|ERİŞİM ENGELLENDİ|REQUEST BLOCKED)/i;
-const VALIDATION_PATTERN = /(LÜTFEN GEÇERLİ|BU ALAN ZORUNLUDUR|ALANI ZORUNLUDUR|DEVAM ETMEK İÇİN BU ALANI|EKSİK BİLGİ)/i;
-const RESULT_PROGRESS_PATTERN = /(TEKLİF SONUÇLARI|TEKLİFLER SORGULANIYOR|SORGULAMA DURUMU|FİYATLAR HAZIRLANIYOR|ŞİRKETLERDEN TEKLİF)/i;
-const SESSION_SMS_PATTERN = /(SMS|TEK KULLANIMLIK|DOĞRULAMA KODU|ONAY KODU|CEP TELEFONUNUZA)/i;
+// Not: JS regex'in /i bayrağı Türkçe İ/ı/i/I harflerini birbirine katlamaz;
+// bu yüzden buradaki tüm Türkçe kalıplar turkishFoldPattern ile üretiliyor
+// (bkz. form-adapter.mjs). Detaylı açıklama orada.
+function foldAnyPattern(phrases) {
+  return new RegExp(`(${phrases.map(turkishFoldPattern).join("|")})`, "i");
+}
+
+const BLOCK_PATTERN = foldAnyPattern(["SORRY, YOU HAVE BEEN BLOCKED", "YOU ARE UNABLE TO ACCESS", "ACCESS DENIED", "ERİŞİM ENGELLENDİ", "REQUEST BLOCKED"]);
+const VALIDATION_PATTERN = foldAnyPattern(["LÜTFEN GEÇERLİ", "BU ALAN ZORUNLUDUR", "ALANI ZORUNLUDUR", "DEVAM ETMEK İÇİN BU ALANI", "EKSİK BİLGİ"]);
+const RESULT_PROGRESS_PATTERN = foldAnyPattern(["TEKLİF SONUÇLARI", "TEKLİFLER SORGULANIYOR", "SORGULAMA DURUMU", "FİYATLAR HAZIRLANIYOR", "ŞİRKETLERDEN TEKLİF"]);
+const SESSION_SMS_PATTERN = foldAnyPattern(["SMS", "TEK KULLANIMLIK", "DOĞRULAMA KODU", "ONAY KODU", "CEP TELEFONUNUZA"]);
+const SESSION_CREDENTIAL_PATTERN = foldAnyPattern(["ŞİFRE", "PASSWORD", "E-POSTA", "EPOSTA"]);
+const DYNAMIC_STEP_PATTERN = foldAnyPattern(["EKSTRA BİLGİLER", "ARAÇ CİNSİ", "ARAÇ MODEL YILI", "MARKA KODU", "ŞASİ NUMARASI"]);
+const MOTORCYCLE_PATTERN = foldAnyPattern(["MOTOSİKLET", "MOTOR"]);
+const KAMYONET_PATTERN = foldAnyPattern(["KAMYONET", "PANELVAN"]);
+const GIRIS_YAP_PATTERN = new RegExp(`^${turkishFoldPattern("Giriş Yap")}$`, "i");
 
 // İhsan altyapısı birden çok markayı (Lion, Sert, Bi Tıkla, İskenderun vb.)
 // aynı paylaşımlı sunucu üzerinden çalıştırıyor. Sunucu aynı anda çok fazla
@@ -148,8 +162,8 @@ async function missingVisibleDynamicFields(target) {
 function vehicleCandidates(vehicleText) {
   const text = String(vehicleText || "").trim();
   const values = [text];
-  if (/KAMYONET|PANELVAN/i.test(text)) values.push("KAMYONET");
-  else if (/MOTOS[Iİ]KLET|MOTOR/i.test(text)) values.push("MOTOSİKLET", "MOTOSIKLET");
+  if (KAMYONET_PATTERN.test(text)) values.push("KAMYONET");
+  else if (MOTORCYCLE_PATTERN.test(text)) values.push("MOTOSİKLET", "MOTOSIKLET");
   else if (text) values.push("OTOMOBİL", "OTOMOBIL");
   return values;
 }
@@ -216,10 +230,13 @@ async function hasIdentityOrPlateField(target) {
 async function escapeNonQueryScreens(target, page) {
   for (let attempt = 0; attempt < 3; attempt += 1) {
     if (await hasIdentityOrPlateField(target)) return true;
-    const selectedCategory = await clickNamedButton(target, [/^Zorunlu Trafik Sigortası$/i, /^Trafik Sigortası$/i], { maxTextLength: 32 });
+    const selectedCategory = await clickNamedButton(target, [
+      new RegExp(`^${turkishFoldPattern("Zorunlu Trafik Sigortası")}$`, "i"),
+      new RegExp(`^${turkishFoldPattern("Trafik Sigortası")}$`, "i"),
+    ], { maxTextLength: 32 });
     const dismissed = selectedCategory
-      || await clickNamedButton(target, [/Şimdi Değil/i, /Vazgeç/i, /Daha Sonra/i, /Atla/i, /Kapat/i])
-      || await clickNamedButton(target, [/Trafik Sigortası Teklif/i, /Trafik Teklifi/i, /Hemen Teklif Al/i, /Teklif Al/i, /Sorgula/i]);
+      || await clickNamedButton(target, [turkishFoldRegex("Şimdi Değil"), /Vazgeç/i, /Daha Sonra/i, /Atla/i, /Kapat/i])
+      || await clickNamedButton(target, [turkishFoldRegex("Trafik Sigortası Teklif"), turkishFoldRegex("Trafik Teklifi"), turkishFoldRegex("Hemen Teklif Al"), turkishFoldRegex("Teklif Al"), /Sorgula/i]);
     if (!dismissed) return false;
     await page.waitForTimeout(900);
   }
@@ -285,8 +302,11 @@ async function sessionDialogTargetAnywhere(page, target) {
 async function dismissUnknownYesNoPopup(target) {
   const dialog = await sessionDialogTarget(target);
   if (dialog === target) return false;
-  const noButton = dialog.getByRole("button", { name: /^Hayır$/i }).first();
-  const hasYes = await namedControlVisible(dialog, [/^Evet$/i]);
+  // Not: gerçek düğme metni tam "Hayır"/"Evet" olmayabilir (ör. "Hayır,
+  // teşekkürler", "Evet, istiyorum"); bu yüzden BAŞLANGIÇ eşleşmesi
+  // kullanılıyor (^Hayır, ^Evet), tam eşleşme değil.
+  const noButton = dialog.getByRole("button", { name: /^Hayır/i }).first();
+  const hasYes = await namedControlVisible(dialog, [/^Evet/i]);
   if (!hasYes || !await noButton.isVisible({ timeout: 300 }).catch(() => false)) return false;
   await noButton.click({ timeout: 3000 }).catch(() => {});
   return true;
@@ -342,7 +362,7 @@ async function completeSessionLogin({ page, target, job, portal, requestOtp, set
   // "Giriş Yap" düğmesi için ayrı bir DOM sorgusu atlanır; SMS metnine göre
   // yapılan denetim (aşağıda) yine de gerçek bir giriş gerekiyorsa bunu yakalar.
   const sessionHint = job.sessionHints?.[portal.id];
-  const loginVisible = !otpInput && sessionHint?.loggedIn !== true && await namedControlVisible(target, [/^Giriş Yap$/i]);
+  const loginVisible = !otpInput && sessionHint?.loggedIn !== true && await namedControlVisible(target, [GIRIS_YAP_PATTERN]);
   const smsStepLikely = loginVisible || (!otpInput && SESSION_SMS_PATTERN.test(await visibleText(loginTarget)));
   if (!otpInput && !smsStepLikely) {
     // Ne SMS/giriş kutusu ne "Giriş Yap" görünüyor: portal önceki oturumdan zaten
@@ -356,7 +376,7 @@ async function completeSessionLogin({ page, target, job, portal, requestOtp, set
   let opened = false;
   if (!otpInput && !phoneFilled && loginVisible && openIfNeeded) {
     await setState("opening", `${portal.name} oturumu için SMS doğrulaması hazırlanıyor`);
-    if (!await clickNamedButton(target, [/^Giriş Yap$/i])) return null;
+    if (!await clickNamedButton(target, [GIRIS_YAP_PATTERN])) return null;
     opened = true;
     const dialogDeadline = Date.now() + 6000;
     let dialogBlocked = null;
@@ -387,7 +407,7 @@ async function completeSessionLogin({ page, target, job, portal, requestOtp, set
       const text = await sessionTargetText(loginTarget, target);
       return {
         status: "auth_required",
-        message: /(ŞİFRE|PASSWORD|E-?POSTA)/i.test(text)
+        message: SESSION_CREDENTIAL_PATTERN.test(text)
           ? `${portal.name} oturumu kullanıcı adı/şifre istiyor; portal oturumu bir kez manuel açılmalı`
           : `${portal.name} giriş penceresindeki telefon alanı eşleştirilemedi`,
         diagnostics: await pageProfile(loginTarget, page),
@@ -397,7 +417,7 @@ async function completeSessionLogin({ page, target, job, portal, requestOtp, set
       await setState("opening", `${portal.name} için SMS gönderim sırası bekleniyor (paylaşılan altyapı hız sınırı)`);
       await requestSmsSlot();
     }
-    const sent = await clickNamedButton(loginTarget, [/Kod(?:u)? Gönder/i, /SMS Gönder/i, /Devam/i, /^Giriş Yap$/i, /^Gönder$/i, /Doğrula/i, /Onayla/i]);
+    const sent = await clickNamedButton(loginTarget, [/Kod(?:u)? Gönder/i, /SMS Gönder/i, /Devam/i, GIRIS_YAP_PATTERN, /^Gönder$/i, /Doğrula/i, /Onayla/i]);
     if (!sent) {
       return { status: "mapping_required", message: `${portal.name} SMS gönderme düğmesi eşleştirilemedi`, diagnostics: await pageProfile(loginTarget, page) };
     }
@@ -428,7 +448,7 @@ async function completeSessionLogin({ page, target, job, portal, requestOtp, set
   if (!await fillOtpCode(loginTarget, code)) {
     return { status: "mapping_required", message: `${portal.name} SMS kodu kutuları doldurulamadı`, diagnostics: await pageProfile(loginTarget, page) };
   }
-  if (!await clickNamedButton(loginTarget, [/Doğrula/i, /Onayla/i, /^Giriş Yap$/i, /Devam/i])) await otpInput.press("Enter").catch(() => {});
+  if (!await clickNamedButton(loginTarget, [/Doğrula/i, /Onayla/i, GIRIS_YAP_PATTERN, /Devam/i])) await otpInput.press("Enter").catch(() => {});
   const verificationDeadline = Date.now() + 15000;
   let stillWaiting = true;
   while (Date.now() < verificationDeadline) {
@@ -452,15 +472,16 @@ function missingInputMessage(job) {
 }
 
 async function lookupOfferFromHistory({ page, target, job, portal }) {
-  const historyOpened = await clickNamedButton(target, [/Geçmiş Teklifler/i, /Geçmiş Sorgular/i, /Tekliflerim/i, /Sorgu Geçmişi/i]);
+  const historyOpened = await clickNamedButton(target, [turkishFoldRegex("Geçmiş Teklifler"), turkishFoldRegex("Geçmiş Sorgular"), /Tekliflerim/i, turkishFoldRegex("Sorgu Geçmişi")]);
   if (!historyOpened) return null;
   await page.waitForTimeout(1200);
   const historyTarget = await resolveTarget(page, portal);
   const plate = job.vehicle.plate;
   const row = historyTarget.locator(`tr:has-text("${plate}"), li:has-text("${plate}"), [class*="row" i]:has-text("${plate}")`).first();
   if (!await row.isVisible({ timeout: 2000 }).catch(() => false)) return null;
-  const viewButton = row.getByRole("button", { name: /Teklifleri Görüntüle|Görüntüle|İncele/i }).first();
-  const viewLink = row.getByRole("link", { name: /Teklifleri Görüntüle|Görüntüle|İncele/i }).first();
+  const viewNamePattern = foldAnyPattern(["Teklifleri Görüntüle", "Görüntüle", "İncele"]);
+  const viewButton = row.getByRole("button", { name: viewNamePattern }).first();
+  const viewLink = row.getByRole("link", { name: viewNamePattern }).first();
   const clicked = await viewButton.isVisible({ timeout: 500 }).then(async (visible) => {
     if (!visible) return false;
     await viewButton.click({ timeout: 4000 });
@@ -536,7 +557,7 @@ async function waitForIhsanOutcome({ page, target, job, portal, resultTimeoutMs,
       if (Date.now() - lastOfferChangeAt >= 5000) return { status: "completed", message: `${offers.length} şirket teklifi doğrulandı`, offers };
     }
 
-    const hasDynamicStep = /(EKSTRA BİLGİLER|ARAÇ CİNSİ|ARAÇ MODEL YILI|MARKA KODU|ŞASİ NUMARASI)/i.test(text);
+    const hasDynamicStep = DYNAMIC_STEP_PATTERN.test(text);
     if (hasDynamicStep && !dynamicAttempted) {
       dynamicAttempted = true;
       await track("filling", "Portalın istediği ek araç bilgileri dolduruluyor");
@@ -548,6 +569,12 @@ async function waitForIhsanOutcome({ page, target, job, portal, resultTimeoutMs,
         // durum) akışı burada KESMEYELİM; gerçekten hiç teklif yoksa
         // eskisi gibi hata döndürülür.
         if (!offers.length && !lastOffers.length) {
+          // Lion gibi sitelerde bu ekran hiç açılamasa bile portal arka
+          // planda teklifi zaten oluşturmuş olabiliyor; "hata" döndürmeden
+          // önce İskenderun'daki gibi "Tekliflerim" geçmiş sekmesinden
+          // aynı plakanın teklifini son bir kez deniyoruz.
+          const historyOffers = !isCancelled() && await lookupOfferFromHistory({ page, target, job, portal }).catch(() => null);
+          if (historyOffers?.length) return { status: "completed", message: `${historyOffers.length} şirket teklifi geçmiş teklifler sekmesinden alındı`, offers: historyOffers };
           return { status: "mapping_required", message: "Ekstra araç bilgileri bölümü açılamadı", diagnostics: await pageProfile(target, page) };
         }
         await page.waitForTimeout(1200);
@@ -630,11 +657,11 @@ export class IhsanPortalAdapter {
     if (await detectCaptcha(page, text)) return { state: "manual_required", message: "Güvenlik doğrulaması gerekiyor" };
     const target = await resolveTarget(page, portal);
     const profile = await pageProfile(target, page);
-    const hasIdentity = profile.labels.some((label) => /KİMLİK/i.test(label)) || profile.controls.some((control) => /kimlik|identity|\btc\b/i.test(`${control.name} ${control.placeholder}`));
+    const hasIdentity = profile.labels.some((label) => turkishFoldRegex("KİMLİK").test(label)) || profile.controls.some((control) => /kimlik|identity|\btc\b/i.test(`${control.name} ${control.placeholder}`));
     const hasPlate = profile.labels.some((label) => /PLAKA/i.test(label)) || profile.controls.some((control) => /plaka|plate/i.test(`${control.name} ${control.placeholder}`));
     let sessionProfile = null;
-    if (portal.smsPolicy === "session_once" && await namedControlVisible(target, [/^Giriş Yap$/i])) {
-      await clickNamedButton(target, [/^Giriş Yap$/i]);
+    if (portal.smsPolicy === "session_once" && await namedControlVisible(target, [GIRIS_YAP_PATTERN])) {
+      await clickNamedButton(target, [GIRIS_YAP_PATTERN]);
       await page.waitForTimeout(700);
       const activeTarget = await latestSessionTarget(page, target, portal);
       const loginTarget = await sessionDialogTarget(activeTarget);
@@ -668,9 +695,13 @@ export class IhsanPortalAdapter {
     // sabit bir gezinme bağlantısı olabiliyor; bu durumda yokluğuna
     // güvenmek yanlış "girişli değil" sonucu verebiliyor. "Çıkış Yap" /
     // "Hesabım" gibi net bir oturum-açık işareti varsa buna öncelik ver.
-    const loggedInSignal = await namedControlVisible(scannedTarget, [/^Çıkış Yap$/i, /^Oturumu Kapat$/i, /^Hesabım$/i]);
+    const loggedInSignal = await namedControlVisible(scannedTarget, [
+      new RegExp(`^${turkishFoldPattern("Çıkış Yap")}$`, "i"),
+      new RegExp(`^${turkishFoldPattern("Oturumu Kapat")}$`, "i"),
+      new RegExp(`^${turkishFoldPattern("Hesabım")}$`, "i"),
+    ]);
     if (loggedInSignal) return { loggedIn: true, message: "Oturum açık görünüyor (hesap/çıkış bağlantısı görüldü)" };
-    const loginVisible = await namedControlVisible(scannedTarget, [/^Giriş Yap$/i]);
+    const loginVisible = await namedControlVisible(scannedTarget, [GIRIS_YAP_PATTERN]);
     return loginVisible
       ? { loggedIn: false, message: "Giriş yapılmamış; sorguda SMS istenecek" }
       : { loggedIn: true, message: "Oturum açık görünüyor" };

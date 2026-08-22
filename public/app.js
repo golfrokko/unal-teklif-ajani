@@ -195,7 +195,7 @@ async function fetchJson(url, options = {}, timeoutMs = 15000) {
 
 function parseVehicleData(raw) {
   return {
-    fullName: raw.match(/(?:ad\s*soyad(?:ı)?|sigortalı(?:\s*adı\s*soyadı)?|müşteri\s*adı\s*soyadı|isim\s*soyisim|poliçe\s*sahibi)[^:\n]*:\s*([^\n\d:]{3,60})/i)?.[1]?.replace(/\s+/g, " ").trim() || "",
+    fullName: raw.match(/(?:ad\s*\/?\s*soy\s*ad(?:ı)?|sigortalı(?:\s*adı\s*soyadı)?|müşteri\s*adı\s*soyadı|isim\s*soyisim|poliçe\s*sahibi)[^:\n]*:\s*([^\n\d:]{3,60})/i)?.[1]?.replace(/\s+/g, " ").trim() || "",
     identity: raw.match(/(?:t\.?c\.?|tc|vkn|vergi)[^0-9]*(\d{10,11})/i)?.[1] || "",
     birthDate: raw.match(/(?:doğum(?:\s+tarihi)?|dogum(?:\s+tarihi)?)[^0-9]*(\d{1,2}[./-]\d{1,2}[./-]\d{4})/i)?.[1] || "",
     plate: raw.match(/(?:plaka)[^A-ZÇĞİÖŞÜ0-9]*((?:0[1-9]|[1-7]\d|8[01])\s*[A-ZÇĞİÖŞÜ]{1,3}\s*\d{2,5})/i)?.[1]?.replace(/\s+/g, " ").toUpperCase() || "",
@@ -839,11 +839,14 @@ document.getElementById("check-sessions").addEventListener("click", async (event
   }
 });
 
-// "Oturum Aç": kullanıcının sorgu öncesinde İhsan altyapılı portallara
-// sağ üstten "Hesap" ile kalıcı olarak giriş yapmasını sağlar. Portallar
-// sırayla açılır; canlı ekrana tıklama CAPTCHA panelindeki mekanizmayla
-// aynı ölçeklemeyi kullanır, ayrıca kullanıcı adı/şifre yazmak için metin
-// ve tuş iletimi de eklenir.
+// "Oturum Aç": kullanıcının sorgu öncesinde bir portala sağ üstten "Hesap"
+// ile kalıcı olarak giriş yapmasını ya da CAPTCHA/güvenlik doğrulamasını
+// önceden tamamlamasını sağlar. Sunucu tarafı (startPortalSession) zaten
+// tüm portallar için geneldir; yalnız İhsan altyapılı (session_once)
+// sitelere değil, manuel doğrulama gerektirebilecek genel karşılaştırma
+// sitelerine de açık. Portallar sırayla açılır; canlı ekrana tıklama
+// CAPTCHA panelindeki mekanizmayla aynı ölçeklemeyi kullanır, ayrıca
+// kullanıcı adı/şifre yazmak için metin ve tuş iletimi de eklenir.
 function stopOpenSessionPolling() {
   if (openSessionPollTimer) { window.clearInterval(openSessionPollTimer); openSessionPollTimer = null; }
 }
@@ -910,7 +913,11 @@ async function advanceOpenSessionQueue() {
 }
 
 document.getElementById("open-sessions").addEventListener("click", () => {
-  const candidates = portals.filter((portal) => portal.smsPolicy === "session_once" && (portal.available ?? portal.enabled));
+  // Not: Bu yalnızca İhsan altyapılı (session_once) portallarla sınırlı
+  // değil; manuel doğrulama/CAPTCHA gerektirebilecek genel karşılaştırma
+  // siteleri de dahil TÜM kullanılabilir portallar için açık (bkz. yukarki
+  // not).
+  const candidates = portals.filter((portal) => portal.available ?? portal.enabled);
   const selectedIds = new Set(selectedPortalIds());
   const targeted = candidates.filter((portal) => selectedIds.has(portal.id));
   openSessionQueue = (targeted.length ? targeted : candidates).map((portal) => portal.id);

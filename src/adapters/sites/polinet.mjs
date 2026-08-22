@@ -4,6 +4,8 @@ import {
   clickSubmit,
   detectCaptcha,
   fillBirthDate,
+  fillFirst,
+  fillSplitRegistrationIfPresent,
   fillVisibleInputsByOrder,
   formSignature,
   humanPause,
@@ -18,9 +20,11 @@ import {
 //    ardından "Trafik Sigortası Teklifi Al" tıklanıyor.
 // 2) Açılan doğum tarihi ekranı doldurulup "Devam Et" tıklanıyor.
 // 3) Script'in yüklenmesi ~20sn sürüyor.
-// 4) Sonraki canlı formda 1. alan plaka, 2. alan ruhsat seri+no BİRLİKTE
-//    (site kendi ayırıyor; biz bölmüyoruz), ardından "Devam" tıklanıp
-//    teklifler hazırlanıyor.
+// 4) Sonraki ekran (kullanıcının ekran görüntüsüyle doğrulandı): "Plaka"
+//    etiketli bir alan, ardından AYRI "Belge Seri" ve "Belge No" alanları
+//    var (ilk varsayımın aksine tek alana yapıştırıp site otomatik
+//    ayırmıyor); GT377874 -> seri "GT", no "377874" olacak şekilde ayrı
+//    ayrı dolduruluyor, ardından "Devam" tıklanıp teklifler hazırlanıyor.
 export class PolinetAdapter extends FormPortalAdapter {
   async run(context) {
     const { page, portal, job, navigationTimeoutMs, resultTimeoutMs, requestOtp, requestCaptchaSolve, setState, isCancelled } = context;
@@ -68,12 +72,16 @@ export class PolinetAdapter extends FormPortalAdapter {
 
     await setState("filling", "Plaka ve ruhsat bilgileri dolduruluyor");
     const vehicleTarget = await resolveTarget(page, portal);
-    // Not: Polinet'te ruhsat seri+no TEK bir alana yapıştırılıyor; site
-    // kendi içinde seri/no ayrımını otomatik yapıyor (SigortaBin'in aksine
-    // burada manuel bölme YAPILMAMALI).
-    const [plateFilled, registrationFilled] = await fillVisibleInputsByOrder(vehicleTarget, [job.vehicle.plate, job.vehicle.registration]);
+    const plateFilled = await fillFirst(vehicleTarget, job.vehicle.plate,
+      ['input[name*="plate" i]', 'input[name*="plaka" i]', 'input[placeholder*="plaka" i]'], ["Plaka"]);
+    const registrationFilled = (await fillSplitRegistrationIfPresent(vehicleTarget, job.vehicle.registration)) || (await fillFirst(vehicleTarget, job.vehicle.registration,
+      ['input[name*="belgeseri" i]', 'input[placeholder*="belge seri" i]'], ["Belge Seri"]));
     if (!plateFilled && !registrationFilled) {
-      return { status: "mapping_required", message: "Plaka/ruhsat ekranındaki canlı veri alanları bulunamadı" };
+      // Ekran hâlâ tanınamıyorsa, son çare olarak sırayla doldurmayı dene.
+      const [plateByOrder, registrationByOrder] = await fillVisibleInputsByOrder(vehicleTarget, [job.vehicle.plate, job.vehicle.registration]);
+      if (!plateByOrder && !registrationByOrder) {
+        return { status: "mapping_required", message: "Plaka/ruhsat ekranındaki canlı veri alanları bulunamadı" };
+      }
     }
     await humanPause();
     const attemptedStages = new Set([await formSignature(vehicleTarget)]);
