@@ -17,7 +17,13 @@ function valuesEffectivelyMatch(actual, expected) {
 }
 
 async function typeIntoInput(input, value, delay) {
-  await input.click({ timeout: 3000, clickCount: 3 }).catch(() => {});
+  // Not: burada bilerek clickCount:3 (üçlü tıklama) KULLANILMIYOR. Eğer
+  // hedef locator gerçek bir metin girişine değil de (yanlış eşleşme
+  // sonucu) bir label/wrapper elementine denk gelirse, üçlü tıklama
+  // tarayıcının doğal paragraf/kelime seçme davranışını tetikleyip sayfadaki
+  // ilgisiz metinleri mavi vurgulu şekilde seçebiliyor. Tek tıkla odaklanıp
+  // seçimi klavyeden (Control+A) yapmak aynı sonucu güvenli şekilde verir.
+  await input.click({ timeout: 3000 }).catch(() => {});
   await input.press("Control+A").catch(() => {});
   await input.press("Backspace").catch(() => {});
   await input.fill("", { timeout: 2000 }).catch(() => {});
@@ -129,7 +135,7 @@ export async function ensurePlateAvailable(target) {
     if (!alreadySelected) await plakamVarButton.click({ timeout: 3000 }).catch(() => {});
     return true;
   }
-  const noPlateToggle = target.locator('label:has-text("Plakam yok"), label:has-text("Plakam Yok")').first();
+  const noPlateToggle = target.locator('label:has-text("Plakam yok"), label:has-text("Plakam Yok"), label:has-text("Plakam henüz çıkmadı")').first();
   if (await noPlateToggle.isVisible({ timeout: 400 }).catch(() => false)) {
     const input = noPlateToggle.locator('input[type="checkbox"], input[type="radio"], input[role="switch"]').first();
     const isChecked = await input.isChecked({ timeout: 400 }).catch(() => false);
@@ -170,6 +176,40 @@ function splitRegistrationParts(registration) {
   const match = String(registration || "").match(/^([A-ZÇĞİÖŞÜ]+)(\d+)$/);
   if (!match) return { seri: registration, no: registration };
   return { seri: match[1], no: match[2] };
+}
+
+async function locateVisibleField(target, selectors, labelTerms) {
+  for (const selector of selectors) {
+    const input = target.locator(selector).first();
+    if (await input.isVisible({ timeout: 300 }).catch(() => false)) return input;
+  }
+  for (const term of labelTerms) {
+    try {
+      const input = target.getByLabel(new RegExp(escapeRegex(term), "i")).first();
+      if (await input.isVisible({ timeout: 300 })) return input;
+    } catch {}
+  }
+  return null;
+}
+
+// Bazı sitelerde ruhsat/belge bilgisi "Belge Seri" (harf) ve "Belge No"
+// (rakam) olarak İKİ AYRI alana bölünmüş oluyor (örn. SigortaBin). Bu
+// durumda tek bir alana tüm değeri ("GT377874") yazmak yanlış olur; ikisi
+// ayrı ayrı doldurulmalı. Yalnızca gerçekten iki ayrı alan görülüyorsa
+// devreye girer, aksi halde tek-alan mantığına bırakılır.
+export async function fillSplitRegistrationIfPresent(target, registration) {
+  const { seri, no } = splitRegistrationParts(registration);
+  if (seri === registration || no === registration || !seri || !no) return false;
+  const seriField = await locateVisibleField(target,
+    ['input[name*="belgeseri" i]', 'input[name*="ruhsatseri" i]', 'input[placeholder*="belge seri" i]', 'input[placeholder*="ruhsat seri" i]'],
+    ["Belge Seri", "Ruhsat Seri"]);
+  const noField = await locateVisibleField(target,
+    ['input[name*="belgeno" i]', 'input[name*="belge_no" i]', 'input[placeholder*="belge no" i]'],
+    ["Belge No", "Ruhsat Belge No", "Tescil No"]);
+  if (!seriField || !noField) return false;
+  await fillHumanLike(seriField, seri);
+  await fillHumanLike(noField, no);
+  return true;
 }
 
 export async function fillMatbuVehicleFields(target, vehicle) {
@@ -267,9 +307,9 @@ export async function fillQuoteForm(target, job) {
   filled.plate = await fillFirst(target, vehicle.plate,
     ['input[name*="plate" i]', 'input[name*="plaka" i]', 'input[placeholder*="plaka" i]'], ["Plaka"]);
   await humanPause();
-  filled.registration = await fillFirst(target, vehicle.registration,
+  filled.registration = (await fillSplitRegistrationIfPresent(target, vehicle.registration)) || (await fillFirst(target, vehicle.registration,
     ['input[name*="registration" i]', 'input[name*="ruhsat" i]', 'input[name*="belge" i]', 'input[name*="tescil" i]', 'input[placeholder*="ruhsat" i]'],
-    ["Ruhsat Numarası", "Ruhsat Seri", "Belge Seri", "Ruhsat Tescil Belge Seri No", "Tescil Belge Seri No", "Ruhsat Seri No"]);
+    ["Ruhsat Numarası", "Ruhsat Seri", "Belge Seri", "Ruhsat Tescil Belge Seri No", "Tescil Belge Seri No", "Ruhsat Seri No"]));
   await fillSecondaryRegistrationFields(target, vehicle.registration);
   await humanPause();
   filled.phone = (await fillFirst(target, phone10, PHONE_SELECTORS, PHONE_LABELS)) || (await fillFirst(target, job.phone, PHONE_SELECTORS, PHONE_LABELS));
@@ -480,6 +520,33 @@ async function openQuoteFlow(target, page) {
   return profile;
 }
 
+// Bazı sitelerde sorgu akışıyla ilgisiz, pazarlama amaçlı "Beni Ara / bize
+// ulaşın" tarzı bir iletişim penceresi çıkabiliyor (ör. Dijipol). Bu pencere
+// kapatılmazsa hem müşterinin telefon numarası yanlışlıkla o forma
+// yazılabilir hem de sürekli değişen içeriği "yeni adım" sanılıp akış
+// gereksiz yere döngüye girebilir. Görüldüğünde sessizce kapatılır.
+const LEAD_CAPTURE_PATTERN = /(BENİ ARA|SİZİ ARAYALIM|GERİ ARAMA TALEBİ)/i;
+
+async function dismissLeadCaptureModal(target) {
+  const heading = target.getByText(LEAD_CAPTURE_PATTERN).first();
+  if (!await heading.isVisible({ timeout: 250 }).catch(() => false)) return false;
+  const dialog = target.locator('[role="dialog"], .modal, .modal-content, .popup').filter({ has: heading }).first();
+  const scope = (await dialog.count().catch(() => 0)) ? dialog : target;
+  const closeCandidates = [
+    scope.getByRole("button", { name: /^(kapat|close|×|x)$/i }).first(),
+    scope.locator('[aria-label="Close" i], [aria-label="Kapat" i]').first(),
+    scope.locator("button.close, .close-button, .modal-close, .popup-close").first(),
+  ];
+  for (const candidate of closeCandidates) {
+    if (await candidate.isVisible({ timeout: 300 }).catch(() => false)) {
+      await candidate.click({ timeout: 2000 }).catch(() => {});
+      return true;
+    }
+  }
+  await target.keyboard.press("Escape").catch(() => {});
+  return true;
+}
+
 export function pageState(text) {
   if (/(ÇOK FAZLA İSTEK|TOO MANY REQUESTS|RATE LIMIT|429)/i.test(text)) return "rate_limited";
   if (/(GİRİŞ YAP|OTURUM AÇ|KULLANICI ADI|ACENTE GİRİŞİ)/i.test(text) && /(ŞİFRE|PASSWORD)/i.test(text)) return "auth_required";
@@ -498,6 +565,10 @@ export async function waitForOutcome({ page, target, job, portal, resultTimeoutM
   };
   while (Date.now() - startedAt < resultTimeoutMs) {
     if (isCancelled()) return { status: "cancelled", message: "Sorgu iptal edildi" };
+    if (await dismissLeadCaptureModal(target)) {
+      await page.waitForTimeout(400);
+      continue;
+    }
     const text = await visibleText(target);
     if (await detectCaptcha(page, text)) return { status: "manual_required", message: "CAPTCHA / güvenlik kontrolü kullanıcı tarafından tamamlanmalı" };
     const detectedState = pageState(text);
@@ -539,8 +610,11 @@ export async function waitForOutcome({ page, target, job, portal, resultTimeoutM
       attemptedStages.add(signature);
       const filled = await fillQuoteForm(target, job);
       const filledCount = Object.values(filled).filter(Boolean).length;
-      if (filledCount && await clickSubmit(target)) {
-        await track("submitted", "Portalın sonraki adımı dolduruldu; cevap bekleniyor");
+      // Bazı adımlarda (ör. EGM/Tramer sorgu sonucu onay ekranı) doldurulacak
+      // yeni bir alan olmaz, sadece "Devam" gibi bir düğme vardır; yine de
+      // tıklamayı denemeliyiz, yoksa akış orada donup kalır.
+      if (await clickSubmit(target)) {
+        await track("submitted", filledCount ? "Portalın sonraki adımı dolduruldu; cevap bekleniyor" : "Portalın sonraki ekranı onaylandı; cevap bekleniyor");
         await page.waitForTimeout(1000);
         continue;
       }

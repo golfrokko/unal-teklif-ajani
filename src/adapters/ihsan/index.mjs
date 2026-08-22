@@ -1,6 +1,5 @@
 import lion from "./lion.mjs";
 import bitikla from "./bitikla.mjs";
-import sigortabaz from "./sigortabaz.mjs";
 import sigortamobil from "./sigortamobil.mjs";
 import tasalti from "./tasalti.mjs";
 import sert from "./sert.mjs";
@@ -12,7 +11,6 @@ import { IhsanPortalAdapter } from "./shared.mjs";
 export const ihsanAdaptersById = {
   lion,
   bitikla,
-  sigortabaz,
   sigortamobil,
   tasalti,
   sert,

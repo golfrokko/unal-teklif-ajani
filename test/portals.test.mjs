@@ -2,8 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { portals } from "../src/portals.mjs";
 
-test("26 portalın SMS politikası tanımlıdır", () => {
-  assert.equal(portals.length, 26);
+test("29 portalın SMS politikası tanımlıdır", () => {
+  assert.equal(portals.length, 29);
   const validPolicies = new Set(["none", "per_query", "session_once", "unknown"]);
   for (const portal of portals) {
     assert.ok(validPolicies.has(portal.smsPolicy), `${portal.id} SMS politikası geçersiz`);
@@ -22,16 +22,16 @@ test("yönlendirme ve bozuk istemci portalları çalışıyor gibi sunulmaz", ()
   assert.equal(portals.find((portal) => portal.id === "policekes").diagnosticState, "client_error");
 });
 
-test("SigortaBaz yavaş açılışlar için daha uzun gezinme süresi kullanır", () => {
-  const portal = portals.find((item) => item.id === "sigortabaz");
-  assert.ok(portal.navigationTimeoutMs >= 60000);
-});
-
-test("dokuz İhsan portalı canlı beta havuzundadır, sekizi varsayılan açık", () => {
+test("sekiz İhsan portalı canlı beta havuzunda ve varsayılan açık", () => {
   const ihsan = portals.filter((portal) => ["ihsan", "ihsan-frame"].includes(portal.adapter));
-  assert.equal(ihsan.length, 9);
+  assert.equal(ihsan.length, 8);
   assert.equal(ihsan.filter((portal) => portal.defaultEnabled).length, 8);
   assert.ok(ihsan.every((portal) => portal.integrationStatus === "beta"));
+});
+
+test("SigortaBin her sorguda taze oturumla açılır (storageState paylaşılmaz)", () => {
+  const portal = portals.find((item) => item.id === "sigortabin");
+  assert.equal(portal.fresh, true);
 });
 
 test("portal id'leri tekilleşiktir", () => {

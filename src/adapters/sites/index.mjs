@@ -3,7 +3,6 @@ import polinet from "./polinet.mjs";
 import sigortakurdu from "./sigortakurdu.mjs";
 import supersigortam from "./supersigortam.mjs";
 import bisigorta from "./bisigorta.mjs";
-import websigorta from "./websigorta.mjs";
 import ibksigorta from "./ibksigorta.mjs";
 import emaxsigorta from "./emaxsigorta.mjs";
 import pakasigorta from "./pakasigorta.mjs";
@@ -15,6 +14,7 @@ import sigortayeri from "./sigortayeri.mjs";
 import sigortala from "./sigortala.mjs";
 import dijipol from "./dijipol.mjs";
 import policekes from "./policekes.mjs";
+import sigortabin from "./sigortabin.mjs";
 import sigortam from "./sigortam.mjs";
 import hangikredi from "./hangikredi.mjs";
 import enpara from "./enpara.mjs";
@@ -30,7 +30,6 @@ export const genericAdaptersById = {
   sigortakurdu,
   supersigortam,
   bisigorta,
-  websigorta,
   ibksigorta,
   emaxsigorta,
   pakasigorta,
@@ -42,6 +41,7 @@ export const genericAdaptersById = {
   sigortala,
   dijipol,
   policekes,
+  sigortabin,
   sigortam,
   hangikredi,
   enpara,

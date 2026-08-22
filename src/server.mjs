@@ -10,7 +10,7 @@ import { FileStore, publicJob } from "./lib/store.mjs";
 import { normalizeOtp, normalizePhone, safeMessage, validateJobInput } from "./lib/validation.mjs";
 import { QueryEngine } from "./engine.mjs";
 
-const VERSION = "1.7.0";
+const VERSION = "1.8.0";
 const portalRegistry = new Map(portals.map((portal) => [portal.id, Object.freeze({ ...portal })]));
 const store = new FileStore({ jobsDir: paths.jobsDir, settingsFile: paths.settingsFile, retentionDays: config.retentionDays });
 const events = new JobEvents();
@@ -163,6 +163,7 @@ app.get("/health", (req, res) => res.json({
   enabledPortalCount: portals.filter((portal) => portalView(portal).enabled).length,
   defaultPhone: normalizePhone(config.defaultPhone),
   maxConcurrency: config.maxConcurrency,
+  genericConcurrency: config.genericConcurrency,
   queue: queue.stats,
   browser: { state: browserManager.state, activeContexts: browserManager.activeContextCount },
   portalProbes,
@@ -177,12 +178,14 @@ app.get(["/api/v1/system", "/api/system"], (req, res) => res.json({
   browser: { state: browserManager.state, activeContexts: browserManager.activeContextCount },
   retentionDays: config.retentionDays,
   maxConcurrency: config.maxConcurrency,
+  genericConcurrency: config.genericConcurrency,
   safety: { captchaBypass: false, smsBypass: false, authorizedUseOnly: true },
 }));
 
 app.get(["/api/v1/portals", "/api/portals"], (req, res) => res.json({
   portals: portals.map(portalView),
   maxConcurrency: config.maxConcurrency,
+  genericConcurrency: config.genericConcurrency,
   defaultEmail: config.defaultEmail,
   probeSummary: probeSummary(),
 }));
@@ -360,7 +363,7 @@ app.use((error, req, res, next) => {
 
 const server = app.listen(config.port, "0.0.0.0", () => {
   console.log(`Ünal Sigorta Teklif Ajanı v${VERSION}: http://0.0.0.0:${config.port}`);
-  console.log(`${portals.length} portal | ${config.maxConcurrency} portal/iş | ${config.maxActiveJobs} aktif iş`);
+  console.log(`${portals.length} portal | İhsan: ${config.maxConcurrency} eşzamanlı, diğer: ${config.genericConcurrency} eşzamanlı | ${config.maxActiveJobs} aktif iş`);
 });
 
 async function probeConfiguredPortals() {

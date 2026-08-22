@@ -11,6 +11,7 @@ import {
   fillNameAndEmail,
   fillOtpCode,
   fillSecondaryRegistrationFields,
+  fillSplitRegistrationIfPresent,
   findOtpInput,
   humanPause,
   pageState,
@@ -152,9 +153,9 @@ async function fillIhsanFields(target, job, { includeDynamic = false, page = nul
   filled.plate = await fillFirst(target, vehicle.plate,
     ['input[placeholder*="34 ABC" i]', 'input[name*="plate" i]', 'input[name*="plaka" i]'], ["Plaka"]);
   await humanPause();
-  filled.registration = await fillFirst(target, vehicle.registration,
+  filled.registration = (await fillSplitRegistrationIfPresent(target, vehicle.registration)) || (await fillFirst(target, vehicle.registration,
     ['input[placeholder*="Ruhsat numaranızı" i]', 'input[name*="registration" i]', 'input[name*="ruhsat" i]', 'input[name*="belge" i]', 'input[name*="tescil" i]'],
-    ["Ruhsat Numarası", "Ruhsat Seri", "Belge Seri", "Ruhsat Tescil Belge Seri No", "Tescil Belge Seri No", "Ruhsat Seri No"]);
+    ["Ruhsat Numarası", "Ruhsat Seri", "Belge Seri", "Ruhsat Tescil Belge Seri No", "Tescil Belge Seri No", "Ruhsat Seri No"]));
   await fillSecondaryRegistrationFields(target, vehicle.registration);
   await humanPause();
   await fillNameAndEmail(target, job);
@@ -248,6 +249,19 @@ async function sessionDialogTarget(target) {
   return target;
 }
 
+// ihsan-frame portallarında (ör. Sigortam Milli) giriş/telefon doğrulama
+// penceresi bazen gömülü widget'ın (iframe) içinde değil, siteyi saran ANA
+// SAYFADA açılıyor. sessionDialogTarget yalnız kendisine verilen target
+// içinde arar; bu yüzden önce iframe içine, bulamazsa ana sayfaya bakar.
+async function sessionDialogTargetAnywhere(page, target) {
+  const inTarget = await sessionDialogTarget(target);
+  if (inTarget !== target) return inTarget;
+  if (target === page) return inTarget;
+  const inPage = await sessionDialogTarget(page);
+  if (inPage !== page) return inPage;
+  return inTarget;
+}
+
 async function sessionTargetText(loginTarget, fallbackTarget) {
   if (loginTarget !== fallbackTarget) {
     const text = await loginTarget.innerText({ timeout: 3000 }).catch(() => "");
@@ -289,7 +303,7 @@ async function latestSessionTarget(page, target, portal) {
 
 async function completeSessionLogin({ page, target, job, portal, requestOtp, setState, requestSmsSlot, openIfNeeded = true }) {
   if (portal.smsPolicy !== "session_once" || job.mode !== "ask_sms") return null;
-  let loginTarget = await sessionDialogTarget(target);
+  let loginTarget = await sessionDialogTargetAnywhere(page, target);
   let otpInput = await findOtpInput(loginTarget);
   let pendingCode = null;
   let phoneFilled = false;
@@ -319,7 +333,7 @@ async function completeSessionLogin({ page, target, job, portal, requestOtp, set
     while (Date.now() < dialogDeadline) {
       await page.waitForTimeout(400);
       const activeTarget = await latestSessionTarget(page, target, portal);
-      loginTarget = await sessionDialogTarget(activeTarget);
+      loginTarget = await sessionDialogTargetAnywhere(page, activeTarget);
       const dialogText = await visibleText(loginTarget);
       if (BLOCK_PATTERN.test(dialogText)) {
         dialogBlocked = { status: "access_blocked", message: "Giriş penceresi açılırken portal güvenlik duvarı erişimi engelledi" };
@@ -353,7 +367,7 @@ async function completeSessionLogin({ page, target, job, portal, requestOtp, set
       await setState("opening", `${portal.name} için SMS gönderim sırası bekleniyor (paylaşılan altyapı hız sınırı)`);
       await requestSmsSlot();
     }
-    const sent = await clickNamedButton(loginTarget, [/Kod(?:u)? Gönder/i, /SMS Gönder/i, /Devam/i, /^Giriş Yap$/i]);
+    const sent = await clickNamedButton(loginTarget, [/Kod(?:u)? Gönder/i, /SMS Gönder/i, /Devam/i, /^Giriş Yap$/i, /^Gönder$/i, /Doğrula/i, /Onayla/i]);
     if (!sent) {
       return { status: "mapping_required", message: `${portal.name} SMS gönderme düğmesi eşleştirilemedi`, diagnostics: await pageProfile(loginTarget, page) };
     }

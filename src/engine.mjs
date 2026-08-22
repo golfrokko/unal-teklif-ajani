@@ -69,13 +69,25 @@ export class QueryEngine {
 
     const selected = job.portalIds.map((id) => this.portalRegistry.get(id)).filter(Boolean);
     console.log(`[job:${job.id}] ${selected.length} portal ile başladı`);
-    await mapLimit(selected, this.config.maxConcurrency, async (portal) => {
+    const isIhsan = (portal) => portal.adapter === "ihsan" || portal.adapter === "ihsan-frame";
+    const ihsanPortals = selected.filter(isIhsan);
+    const genericPortals = selected.filter((portal) => !isIhsan(portal));
+    const runPortal = async (portal) => {
       if (job.cancelRequested) {
         await this.#setPortalState(job, portal, "cancelled", "Sorgu iptal edildi");
         return;
       }
       await this.#executePortal(job, portal);
-    });
+    };
+    // İhsan altyapılı siteler paylaşılan bir backend'i (ve SMS hız sınırını)
+    // paylaştığı için sınırlı/sıralı çalıştırılır; diğer genel karşılaştırma
+    // siteleri arasında böyle bir çakışma riski olmadığından sunucu
+    // kaynağı elverdiğince (genericConcurrency) çok daha yüksek paralellikte
+    // çalıştırılıp toplam sorgu süresi kısaltılır.
+    await Promise.all([
+      mapLimit(ihsanPortals, this.config.maxConcurrency, runPortal),
+      mapLimit(genericPortals, this.config.genericConcurrency, runPortal),
+    ]);
 
     job.results = deduplicateOffers(job.results);
     const states = Object.values(job.portalStates || {}).map((state) => state.status);

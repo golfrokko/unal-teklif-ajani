@@ -564,8 +564,8 @@ async function boot() {
     if (health.defaultPhone) elements.phone.value = formatPhone(health.defaultPhone);
     if (portalData.defaultEmail) elements.email.value = portalData.defaultEmail;
     portals = portalData.portals;
-    elements["max-concurrency"].textContent = `En fazla ${portalData.maxConcurrency} eşzamanlı sorgu`;
-    elements["concurrency-stat"].textContent = portalData.maxConcurrency;
+    elements["max-concurrency"].textContent = `İhsan: ${portalData.maxConcurrency} · Diğer: ${portalData.genericConcurrency} eşzamanlı`;
+    elements["concurrency-stat"].textContent = portalData.maxConcurrency + portalData.genericConcurrency;
     renderPortals();
     const lastChecked = portals.map((portal) => portal.sessionCheckedAt).filter(Boolean).sort().at(-1);
     if (lastChecked) {

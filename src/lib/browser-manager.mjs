@@ -67,7 +67,10 @@ export class BrowserManager {
   async withPortalPage(portal, callback) {
     const browser = await this.getBrowser();
     const sessionFile = path.join(this.sessionsDir, `${portal.id}.json`);
-    const storageState = await this.#readSession(sessionFile);
+    // portal.fresh: bazı sitelerin (ör. SigortaBin) önbellek/oturum durumu
+    // ardışık sorguları birbirine karıştırıyor; bu portallar için kayıtlı
+    // oturum hiç okunmaz/yazılmaz, her sorgu tamamen temiz bir bağlamda açılır.
+    const storageState = portal.fresh ? null : await this.#readSession(sessionFile);
     const context = await browser.newContext({
       ...(storageState ? { storageState } : {}),
       viewport: { width: 1440, height: 1000 },
@@ -80,9 +83,11 @@ export class BrowserManager {
     try {
       return await callback(page, context);
     } finally {
-      await this.#saveSession(context, sessionFile).catch((error) => {
-        console.warn(`[browser:${portal.id}] Oturum kaydedilemedi: ${error.message}`);
-      });
+      if (!portal.fresh) {
+        await this.#saveSession(context, sessionFile).catch((error) => {
+          console.warn(`[browser:${portal.id}] Oturum kaydedilemedi: ${error.message}`);
+        });
+      }
       this.#activeContexts.delete(context);
       await context.close().catch(() => {});
     }
