@@ -47,6 +47,7 @@ class SmsGate {
 
 export class QueryEngine {
   #inputWaiters = new Map();
+  #livePages = new Map();
   #ihsanSmsGate;
 
   constructor({ store, events, browserManager, portalRegistry, config, paths }) {
@@ -154,6 +155,30 @@ export class QueryEngine {
     return true;
   }
 
+  // CAPTCHA'yı biz çözmeyiz; kullanıcı panelden gerçek zamanlı ekran
+  // görüntüsüne bakıp aynı tarayıcı sayfasına tıklayarak kendisi çözer.
+  // Bu üç metod o canlı etkileşimi taşır.
+  resumeCaptcha(jobId, portalId) {
+    const key = `${jobId}:${portalId}:captcha`;
+    const waiter = this.#inputWaiters.get(key);
+    if (!waiter) return false;
+    waiter.resolve();
+    return true;
+  }
+
+  async clickLivePage(jobId, portalId, x, y) {
+    const page = this.#livePages.get(`${jobId}:${portalId}`);
+    if (!page) return false;
+    await page.mouse.click(x, y).catch(() => {});
+    return true;
+  }
+
+  async screenshotLivePage(jobId, portalId) {
+    const page = this.#livePages.get(`${jobId}:${portalId}`);
+    if (!page) return null;
+    return page.screenshot({ type: "jpeg", quality: 60, timeout: 4000 }).catch(() => null);
+  }
+
   async cancel(jobId) {
     const job = this.store.getJob(jobId);
     if (!job || ["completed", "partial", "failed", "cancelled", "interrupted"].includes(job.status)) return false;
@@ -161,6 +186,9 @@ export class QueryEngine {
     if (job.status !== "queued") job.status = "cancelling";
     for (const [key, waiter] of this.#inputWaiters) {
       if (key.startsWith(`${jobId}:`)) waiter.reject(new Error("Sorgu iptal edildi"));
+    }
+    for (const key of this.#livePages.keys()) {
+      if (key.startsWith(`${jobId}:`)) this.#livePages.delete(key);
     }
     await this.#saveAndPublish(job, "job.cancelling");
     return true;
@@ -214,6 +242,7 @@ export class QueryEngine {
             requestSmsSlot: (portal.adapter === "ihsan" || portal.adapter === "ihsan-frame")
               ? () => this.#ihsanSmsGate.acquire()
               : undefined,
+            requestCaptchaSolve: () => this.#waitForCaptcha(job, portal, page),
           });
           if (result.status && FAILURE_PORTAL_STATES.has(result.status)) {
             result.screenshotPath = await this.#captureScreenshot(page, job.id, portal.id);
@@ -284,6 +313,34 @@ export class QueryEngine {
     } catch {
       return false;
     }
+  }
+
+  #waitForCaptcha(job, portal, page) {
+    const key = `${job.id}:${portal.id}:captcha`;
+    const pageKey = `${job.id}:${portal.id}`;
+    return new Promise(async (resolve) => {
+      const timeout = setTimeout(() => {
+        this.#inputWaiters.delete(key);
+        this.#livePages.delete(pageKey);
+        resolve();
+      }, this.config.approvalTimeoutMs);
+      this.#inputWaiters.set(key, {
+        resolve: () => {
+          clearTimeout(timeout);
+          this.#inputWaiters.delete(key);
+          this.#livePages.delete(pageKey);
+          resolve();
+        },
+        reject: () => {
+          clearTimeout(timeout);
+          this.#inputWaiters.delete(key);
+          this.#livePages.delete(pageKey);
+          resolve();
+        },
+      });
+      this.#livePages.set(pageKey, page);
+      await this.#setPortalState(job, portal, "waiting_captcha", `${portal.name} güvenlik kontrolü (CAPTCHA) gösteriyor; panelden canlı ekrana tıklayıp kendiniz çözün, sonra devam edin`);
+    });
   }
 
   #waitForApproval(job, portal, outcome) {

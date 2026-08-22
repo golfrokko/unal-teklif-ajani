@@ -301,7 +301,7 @@ async function latestSessionTarget(page, target, portal) {
   return resolveTarget(latest, portal);
 }
 
-async function completeSessionLogin({ page, target, job, portal, requestOtp, setState, requestSmsSlot, openIfNeeded = true }) {
+async function completeSessionLogin({ page, target, job, portal, requestOtp, setState, requestSmsSlot, requestCaptchaSolve, openIfNeeded = true }) {
   if (portal.smsPolicy !== "session_once" || job.mode !== "ask_sms") return null;
   let loginTarget = await sessionDialogTargetAnywhere(page, target);
   let otpInput = await findOtpInput(loginTarget);
@@ -340,8 +340,13 @@ async function completeSessionLogin({ page, target, job, portal, requestOtp, set
         break;
       }
       if (await detectCaptcha(page, dialogText)) {
-        dialogBlocked = { status: "manual_required", message: "Giriş penceresinde CAPTCHA / güvenlik doğrulaması çıktı" };
-        break;
+        if (typeof requestCaptchaSolve !== "function") {
+          dialogBlocked = { status: "manual_required", message: "Giriş penceresinde CAPTCHA / güvenlik doğrulaması çıktı" };
+          break;
+        }
+        await requestCaptchaSolve();
+        await page.waitForTimeout(600);
+        continue;
       }
       otpInput = await findOtpInput(loginTarget);
       if (otpInput) break;
@@ -448,7 +453,7 @@ async function lookupOfferFromHistory({ page, target, job, portal }) {
   return offers.length ? offers : null;
 }
 
-async function waitForIhsanOutcome({ page, target, job, portal, resultTimeoutMs, historyLookupDelayMs, requestOtp, requestField, requestSmsSlot, setState, isCancelled }) {
+async function waitForIhsanOutcome({ page, target, job, portal, resultTimeoutMs, historyLookupDelayMs, requestOtp, requestField, requestSmsSlot, requestCaptchaSolve, setState, isCancelled }) {
   const startedAt = Date.now();
   let dynamicAttempted = false;
   let lastOffers = [];
@@ -463,10 +468,17 @@ async function waitForIhsanOutcome({ page, target, job, portal, resultTimeoutMs,
     if (isCancelled()) return { status: "cancelled", message: "Sorgu iptal edildi" };
     const text = await visibleText(target);
     if (BLOCK_PATTERN.test(text)) return { status: "access_blocked", message: "Portal güvenlik duvarı bu sunucunun erişimini engelledi" };
-    if (await detectCaptcha(page, text)) return { status: "manual_required", message: "CAPTCHA / güvenlik kontrolü kullanıcı tarafından tamamlanmalı" };
+    if (await detectCaptcha(page, text)) {
+      if (typeof requestCaptchaSolve !== "function") {
+        return { status: "manual_required", message: "CAPTCHA / güvenlik kontrolü kullanıcı tarafından tamamlanmalı" };
+      }
+      await requestCaptchaSolve();
+      await page.waitForTimeout(600);
+      continue;
+    }
 
     if (!sessionChallengeCompleted) {
-      const sessionOutcome = await completeSessionLogin({ page, target, job, portal, requestOtp, requestSmsSlot, setState: track, openIfNeeded: true });
+      const sessionOutcome = await completeSessionLogin({ page, target, job, portal, requestOtp, requestSmsSlot, requestCaptchaSolve, setState: track, openIfNeeded: true });
       if (sessionOutcome?.status) return sessionOutcome;
       if (sessionOutcome?.handled) {
         sessionChallengeCompleted = true;
@@ -619,7 +631,7 @@ export class IhsanPortalAdapter {
   }
 
   async run(context) {
-    const { page, portal, job, navigationTimeoutMs, resultTimeoutMs, historyLookupDelayMs, setState, requestOtp, requestField, requestSmsSlot, isCancelled } = context;
+    const { page, portal, job, navigationTimeoutMs, resultTimeoutMs, historyLookupDelayMs, setState, requestOtp, requestField, requestSmsSlot, requestCaptchaSolve, isCancelled } = context;
     const missing = missingInputMessage(job);
     if (missing) return { status: "input_required", message: missing };
     await setState("opening", "İhsan portalı açılıyor");
@@ -627,9 +639,16 @@ export class IhsanPortalAdapter {
     await page.waitForTimeout(900);
     if (isCancelled()) return { status: "cancelled", message: "Sorgu iptal edildi" };
 
-    const firstText = await visibleText(page);
+    let firstText = await visibleText(page);
     if (BLOCK_PATTERN.test(firstText)) return { status: "access_blocked", message: "Portal güvenlik duvarı bu sunucunun erişimini engelledi" };
-    if (await detectCaptcha(page, firstText)) return { status: "manual_required", message: "CAPTCHA / güvenlik kontrolü kullanıcı tarafından tamamlanmalı" };
+    for (let attempt = 0; await detectCaptcha(page, firstText); attempt += 1) {
+      if (typeof requestCaptchaSolve !== "function" || attempt >= 5) {
+        return { status: "manual_required", message: "CAPTCHA / güvenlik kontrolü kullanıcı tarafından tamamlanmalı" };
+      }
+      await requestCaptchaSolve();
+      if (isCancelled()) return { status: "cancelled", message: "Sorgu iptal edildi" };
+      firstText = await visibleText(page);
+    }
     const target = await resolveTarget(page, portal);
     const initialState = pageState(await visibleText(target));
     if (initialState) return { status: initialState, message: initialState === "auth_required" ? "Portal oturumu açılmalı" : "Portal isteği kabul etmedi" };
@@ -644,6 +663,6 @@ export class IhsanPortalAdapter {
     if (!await clickSubmit(target)) return { status: "mapping_required", message: "İhsan formunun Gönder düğmesi eşleştirilemedi", diagnostics: await pageProfile(target, page) };
 
     await setState("submitted", "İlk form gönderildi; portalın cevabı doğrulanıyor");
-    return waitForIhsanOutcome({ page, target, job, portal, resultTimeoutMs, historyLookupDelayMs, requestOtp, requestField, requestSmsSlot, setState, isCancelled });
+    return waitForIhsanOutcome({ page, target, job, portal, resultTimeoutMs, historyLookupDelayMs, requestOtp, requestField, requestSmsSlot, requestCaptchaSolve, setState, isCancelled });
   }
 }

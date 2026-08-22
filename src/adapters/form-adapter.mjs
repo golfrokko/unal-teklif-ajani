@@ -554,7 +554,7 @@ export function pageState(text) {
   return null;
 }
 
-export async function waitForOutcome({ page, target, job, portal, resultTimeoutMs, requestOtp, setState, isCancelled, attemptedStages = new Set() }) {
+export async function waitForOutcome({ page, target, job, portal, resultTimeoutMs, requestOtp, requestCaptchaSolve, setState, isCancelled, attemptedStages = new Set() }) {
   const startedAt = Date.now();
   let lastOffers = [];
   let lastOfferChangeAt = 0;
@@ -570,7 +570,14 @@ export async function waitForOutcome({ page, target, job, portal, resultTimeoutM
       continue;
     }
     const text = await visibleText(target);
-    if (await detectCaptcha(page, text)) return { status: "manual_required", message: "CAPTCHA / güvenlik kontrolü kullanıcı tarafından tamamlanmalı" };
+    if (await detectCaptcha(page, text)) {
+      if (typeof requestCaptchaSolve !== "function") {
+        return { status: "manual_required", message: "CAPTCHA / güvenlik kontrolü kullanıcı tarafından tamamlanmalı" };
+      }
+      await requestCaptchaSolve();
+      await page.waitForTimeout(600);
+      continue;
+    }
     const detectedState = pageState(text);
     if (detectedState) return { status: detectedState, message: detectedState === "no_offer" ? "Portal teklif bulunamadığını bildirdi" : "Portal oturum veya hız sınırı bildirdi" };
 
@@ -648,14 +655,21 @@ export class FormPortalAdapter {
   }
 
   async run(context) {
-    const { page, portal, job, navigationTimeoutMs, resultTimeoutMs, setState, requestOtp, isCancelled } = context;
+    const { page, portal, job, navigationTimeoutMs, resultTimeoutMs, setState, requestOtp, requestCaptchaSolve, isCancelled } = context;
     await setState("opening", "Portal açılıyor");
     await page.goto(portal.url, { waitUntil: "domcontentloaded", timeout: navigationTimeoutMs });
     await page.waitForTimeout(800);
     if (isCancelled()) return { status: "cancelled", message: "Sorgu iptal edildi" };
 
-    const firstText = await visibleText(page);
-    if (await detectCaptcha(page, firstText)) return { status: "manual_required", message: "CAPTCHA / güvenlik kontrolü kullanıcı tarafından tamamlanmalı" };
+    let firstText = await visibleText(page);
+    for (let attempt = 0; await detectCaptcha(page, firstText); attempt += 1) {
+      if (typeof requestCaptchaSolve !== "function" || attempt >= 5) {
+        return { status: "manual_required", message: "CAPTCHA / güvenlik kontrolü kullanıcı tarafından tamamlanmalı" };
+      }
+      await requestCaptchaSolve();
+      if (isCancelled()) return { status: "cancelled", message: "Sorgu iptal edildi" };
+      firstText = await visibleText(page);
+    }
     const initialState = pageState(firstText);
     if (initialState) return { status: initialState, message: initialState === "auth_required" ? "Portal oturumu açılmalı" : "Portal isteği kabul etmedi" };
 
@@ -671,6 +685,6 @@ export class FormPortalAdapter {
     if (!await clickSubmit(target)) return { status: "mapping_required", message: "Sorgu düğmesi eşleştirilemedi" };
 
     await setState("submitted", "Form gönderildi; portal cevabı bekleniyor");
-    return waitForOutcome({ page, target, job, portal, resultTimeoutMs, requestOtp, setState, isCancelled, attemptedStages });
+    return waitForOutcome({ page, target, job, portal, resultTimeoutMs, requestOtp, requestCaptchaSolve, setState, isCancelled, attemptedStages });
   }
 }

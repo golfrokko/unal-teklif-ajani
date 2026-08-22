@@ -10,7 +10,7 @@ import { FileStore, publicJob } from "./lib/store.mjs";
 import { normalizeOtp, normalizePhone, safeMessage, validateJobInput } from "./lib/validation.mjs";
 import { QueryEngine } from "./engine.mjs";
 
-const VERSION = "1.8.0";
+const VERSION = "1.9.0";
 const portalRegistry = new Map(portals.map((portal) => [portal.id, Object.freeze({ ...portal })]));
 const store = new FileStore({ jobsDir: paths.jobsDir, settingsFile: paths.settingsFile, retentionDays: config.retentionDays });
 const events = new JobEvents();
@@ -317,6 +317,39 @@ app.get(["/api/v1/jobs/:jobId/screenshot/:portalId", "/api/jobs/:jobId/screensho
   res.sendFile(file, (error) => {
     if (error && !res.headersSent) res.status(404).json({ error: "Ekran görüntüsü bulunamadı" });
   });
+});
+
+app.post(["/api/v1/jobs/:jobId/captcha/:portalId/continue", "/api/jobs/:jobId/captcha/:portalId/continue"], (req, res) => {
+  const job = store.getJob(req.params.jobId);
+  if (!job) return res.status(404).json({ error: "Sorgu bulunamadı" });
+  if (!engine.resumeCaptcha(job.id, req.params.portalId)) return res.status(409).json({ error: "Bu portal şu anda CAPTCHA çözümü beklemiyor" });
+  res.json({ ok: true });
+});
+
+app.get(["/api/v1/jobs/:jobId/captcha/:portalId/live", "/api/jobs/:jobId/captcha/:portalId/live"], async (req, res, next) => {
+  try {
+    const job = store.getJob(req.params.jobId);
+    if (!job) return res.status(404).json({ error: "Sorgu bulunamadı" });
+    const portalId = String(req.params.portalId || "");
+    if (!/^[a-z0-9_-]+$/i.test(portalId)) return res.status(400).json({ error: "Geçersiz portal" });
+    const buffer = await engine.screenshotLivePage(job.id, portalId);
+    if (!buffer) return res.status(404).json({ error: "Canlı görüntü bulunamadı" });
+    res.set("Cache-Control", "no-store");
+    res.type("image/jpeg").send(buffer);
+  } catch (error) { next(error); }
+});
+
+app.post(["/api/v1/jobs/:jobId/captcha/:portalId/click", "/api/jobs/:jobId/captcha/:portalId/click"], async (req, res, next) => {
+  try {
+    const job = store.getJob(req.params.jobId);
+    if (!job) return res.status(404).json({ error: "Sorgu bulunamadı" });
+    const x = Number(req.body?.x);
+    const y = Number(req.body?.y);
+    if (!Number.isFinite(x) || !Number.isFinite(y) || x < 0 || y < 0) return res.status(400).json({ error: "Geçersiz koordinat" });
+    const ok = await engine.clickLivePage(job.id, req.params.portalId, x, y);
+    if (!ok) return res.status(409).json({ error: "Bu portal şu anda canlı etkileşim beklemiyor" });
+    res.json({ ok: true });
+  } catch (error) { next(error); }
 });
 
 app.post(["/api/v1/jobs/:id/cancel", "/api/jobs/:id/cancel"], async (req, res, next) => {

@@ -16,6 +16,7 @@ const statusNames = {
   waiting_otp: "SMS kodu bekliyor",
   waiting_input: "Ek bilgi bekleniyor",
   waiting_approval: "Onayınız bekleniyor",
+  waiting_captcha: "CAPTCHA sizi bekliyor",
   retrying: "Yeniden deneniyor",
   completed: "Tamamlandı",
   no_offer: "Teklif yok",
@@ -80,7 +81,7 @@ function escapeHtml(value) {
 const LOG_LEVELS = {
   success: ["completed", "no_offer"],
   error: ["error", "timeout", "mapping_required", "input_required", "access_blocked", "auth_required", "manual_required", "rate_limited", "failed"],
-  warn: ["skipped_sms", "cancelled", "interrupted", "retrying", "partial", "waiting_approval"],
+  warn: ["skipped_sms", "cancelled", "interrupted", "retrying", "partial", "waiting_approval", "waiting_captcha"],
 };
 function logLevelForStatus(status) {
   if (LOG_LEVELS.success.includes(status)) return "success";
@@ -330,6 +331,7 @@ function renderProgress(job) {
     const waitingForOtp = state.status === "waiting_otp";
     const waitingForInput = state.status === "waiting_input";
     const waitingForApproval = state.status === "waiting_approval";
+    const waitingForCaptcha = state.status === "waiting_captcha";
     const inputId = waitingForOtp ? "otp" : escapeHtml(state.inputId || "");
     const inputLabel = waitingForOtp ? "SMS doğrulaması" : escapeHtml(state.inputLabel || "Ek bilgi");
     const inputCopy = waitingForOtp ? "Telefona gelen kodu aşağıya yazın. Kod yalnız bu firmaya gönderilir." : "Portal bu bilgiyi istiyor; aşağıya yazıp gönderin.";
@@ -357,6 +359,16 @@ function renderProgress(job) {
               <button type="button" class="approval-continue" data-portal-id="${portalId}">Devam Et</button>
             </div>
           </div>` : ""}
+        ${waitingForCaptcha ? `
+          <div class="captcha-inline" data-portal-id="${portalId}">
+            <div class="otp-inline-copy"><strong>${portalName} güvenlik kontrolü (CAPTCHA) bekliyor</strong><small>Aşağıdaki canlı ekrana tıklayarak CAPTCHA'yı kendiniz çözün; bittiğinde "Devam Et"e basın.</small></div>
+            <div class="captcha-live-wrap">
+              <img class="captcha-live-image" data-portal-id="${portalId}" src="/api/jobs/${encodeURIComponent(activeJobId || "")}/captcha/${portalId}/live?t=${Date.now()}" alt="${portalName} canlı ekran" />
+            </div>
+            <div class="approval-inline-actions">
+              <button type="button" class="captcha-continue" data-portal-id="${portalId}">Devam Et, çözdüm</button>
+            </div>
+          </div>` : ""}
       </article>`;
   }).join("");
 
@@ -377,15 +389,18 @@ function renderProgress(job) {
 function renderOtp(job) {
   const waiting = Object.values(job.portalStates || {}).filter((state) => state.status === "waiting_otp" || state.status === "waiting_input");
   const waitingApproval = Object.values(job.portalStates || {}).filter((state) => state.status === "waiting_approval");
+  const waitingCaptcha = Object.values(job.portalStates || {}).filter((state) => state.status === "waiting_captcha");
   elements["otp-dock"].classList.add("hidden");
   elements["otp-count"].textContent = `${waiting.length} portal panelden bilgi bekliyor`;
   elements["otp-cards"].innerHTML = "";
   document.querySelectorAll(".otp-entry").forEach((form) => form.addEventListener("submit", submitInlineValue));
   document.querySelectorAll(".otp-resend").forEach((button) => button.addEventListener("click", requestResend));
   document.querySelectorAll(".approval-continue").forEach((button) => button.addEventListener("click", approvePortal));
+  document.querySelectorAll(".captcha-continue").forEach((button) => button.addEventListener("click", continueCaptcha));
+  document.querySelectorAll(".captcha-live-image").forEach((image) => image.addEventListener("click", forwardCaptchaClick));
 
   const waitingIds = new Set(waiting.map((state) => state.portalId));
-  const announceIds = new Set([...waitingIds, ...waitingApproval.map((state) => state.portalId)]);
+  const announceIds = new Set([...waitingIds, ...waitingApproval.map((state) => state.portalId), ...waitingCaptcha.map((state) => state.portalId)]);
   for (const portalId of [...announcedOtpPortals]) {
     if (!announceIds.has(portalId)) announcedOtpPortals.delete(portalId);
   }
@@ -396,11 +411,12 @@ function renderOtp(job) {
     if (!waitingIds.has(portalId)) otpErrorState.delete(portalId);
   }
   const freshOtp = waiting.find((state) => !announcedOtpPortals.has(state.portalId))
-    || waitingApproval.find((state) => !announcedOtpPortals.has(state.portalId));
+    || waitingApproval.find((state) => !announcedOtpPortals.has(state.portalId))
+    || waitingCaptcha.find((state) => !announcedOtpPortals.has(state.portalId));
   if (freshOtp) {
     announcedOtpPortals.add(freshOtp.portalId);
     window.requestAnimationFrame(() => {
-      const form = [...document.querySelectorAll("#progress-list .otp-entry, #progress-list .approval-inline")].find((item) => item.dataset.portalId === freshOtp.portalId);
+      const form = [...document.querySelectorAll("#progress-list .otp-entry, #progress-list .approval-inline, #progress-list .captcha-inline")].find((item) => item.dataset.portalId === freshOtp.portalId);
       form?.scrollIntoView({ behavior: "smooth", block: "center" });
       form?.querySelector("input, select")?.focus({ preventScroll: true });
     });
@@ -504,6 +520,48 @@ async function approvePortal(event) {
     showError(error.message);
     button.disabled = false;
     button.textContent = "Devam Et";
+  }
+}
+
+const CAPTCHA_VIEWPORT = { width: 1440, height: 1000 };
+
+async function forwardCaptchaClick(event) {
+  const image = event.currentTarget;
+  const portalId = image.dataset.portalId;
+  const rect = image.getBoundingClientRect();
+  const x = Math.round(((event.clientX - rect.left) / rect.width) * CAPTCHA_VIEWPORT.width);
+  const y = Math.round(((event.clientY - rect.top) / rect.height) * CAPTCHA_VIEWPORT.height);
+  image.classList.add("captcha-live-busy");
+  try {
+    const response = await fetch(`/api/jobs/${activeJobId}/captcha/${portalId}/click`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ x, y })
+    });
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({}));
+      throw new Error(body.error || "Tıklama iletilemedi");
+    }
+    image.src = `/api/jobs/${activeJobId}/captcha/${portalId}/live?t=${Date.now()}`;
+  } catch (error) {
+    showError(error.message);
+  } finally {
+    image.classList.remove("captcha-live-busy");
+  }
+}
+
+async function continueCaptcha(event) {
+  const button = event.currentTarget;
+  const portalId = button.dataset.portalId;
+  button.disabled = true;
+  button.textContent = "Devam ediliyor…";
+  try {
+    const response = await fetch(`/api/jobs/${activeJobId}/captcha/${portalId}/continue`, { method: "POST" });
+    const body = await response.json();
+    if (!response.ok) throw new Error(body.error || "Devam edilemedi");
+    await pollJob();
+  } catch (error) {
+    showError(error.message);
+    button.disabled = false;
+    button.textContent = "Devam Et, çözdüm";
   }
 }
 
