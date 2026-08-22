@@ -27,6 +27,21 @@ test("yalnız önüne ₺ konan fiyatları da yakalar (sonrasında TL/₺ olmasa
   assert.equal(offers[0].price, 9850.40);
 });
 
+test("fiyatın yanındaki taksit sayısını yakalar", () => {
+  const offers = extractOffersFromText("MAPFRE SİGORTA 12.450,75 TL 12 Taksit ile öde", portal);
+  assert.equal(offers[0].installments, "12 taksit");
+});
+
+test("peşin ödeme ibaresini de yakalar", () => {
+  const offers = extractOffersFromText("ALLIANZ ₺8.200,00 Peşin Fiyat", portal);
+  assert.equal(offers[0].installments, "Peşin");
+});
+
+test("taksit bilgisi yoksa alanı hiç eklemez", () => {
+  const offers = extractOffersFromText("AXA SİGORTA 950,00 TL", portal);
+  assert.equal(offers[0].installments, undefined);
+});
+
 test("aynı portal fiyatını tekilleştirip en iyi teklifi özetler", () => {
   const input = [
     { company: "ALLIANZ", price: 10000, sourcePortalId: "a" },

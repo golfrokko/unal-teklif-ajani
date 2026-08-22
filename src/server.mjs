@@ -10,7 +10,7 @@ import { FileStore, publicJob } from "./lib/store.mjs";
 import { normalizeOtp, normalizePhone, safeMessage, validateJobInput } from "./lib/validation.mjs";
 import { QueryEngine } from "./engine.mjs";
 
-const VERSION = "1.9.0";
+const VERSION = "1.10.0";
 const portalRegistry = new Map(portals.map((portal) => [portal.id, Object.freeze({ ...portal })]));
 const store = new FileStore({ jobsDir: paths.jobsDir, settingsFile: paths.settingsFile, retentionDays: config.retentionDays });
 const events = new JobEvents();
@@ -38,9 +38,11 @@ function portalView(portal) {
     probeState: probe?.state || null,
     probeMessage: probe?.message || "",
     probeCheckedAt: probe?.checkedAt || null,
+    probeHasScreenshot: probe?.hasScreenshot || false,
     sessionLoggedIn: session?.loggedIn ?? null,
     sessionMessage: session?.message || "",
     sessionCheckedAt: session?.checkedAt || null,
+    sessionHasScreenshot: session?.hasScreenshot || false,
   };
 }
 
@@ -92,6 +94,7 @@ function conciseProbe(result) {
   return {
     state: result.state || "error",
     message: result.message || messages[result.state] || "Portal teşhisi tamamlandı",
+    ...(result.hasScreenshot ? { hasScreenshot: true } : {}),
     ...(result.fields ? { fields: result.fields } : {}),
     ...(!result.fields && Array.isArray(result.controls) ? { fields: { controlCount: result.controls.length, labelCount: result.labels?.length || 0 } } : {}),
   };
@@ -221,6 +224,102 @@ app.post(["/api/v1/sessions/check", "/api/sessions/check"], async (req, res, nex
     await checkAllSessions();
     res.json({ ok: true, portals: portals.map(portalView) });
   } catch (error) { next(error); }
+});
+
+app.get(["/api/v1/portals/:portalId/screenshot/:kind", "/api/portals/:portalId/screenshot/:kind"], (req, res) => {
+  const portalId = String(req.params.portalId || "");
+  const kind = String(req.params.kind || "");
+  if (!/^[a-z0-9_-]+$/i.test(portalId)) return res.status(400).json({ error: "Geçersiz portal" });
+  if (!["probe", "session"].includes(kind)) return res.status(400).json({ error: "Geçersiz ekran görüntüsü türü" });
+  const file = path.join(paths.screenshotsDir, `${kind}-${portalId}.jpg`);
+  res.sendFile(file, (error) => {
+    if (error && !res.headersSent) res.status(404).json({ error: "Ekran görüntüsü bulunamadı" });
+  });
+});
+
+// "Oturum Aç": sorgu öncesinde kullanıcının bir portala kalıcı olarak
+// (kendi elleriyle) giriş yapmasını sağlayan canlı, job'a bağlı olmayan
+// oturum akışı. CAPTCHA canlı çözümüyle aynı tıklama-iletme mantığını
+// kullanır, ayrıca metin/tuş iletimi de destekler (kullanıcı adı/şifre).
+function validatePortalIdParam(req, res) {
+  const portalId = String(req.params.portalId || "");
+  if (!/^[a-z0-9_-]+$/i.test(portalId) || !portalRegistry.has(portalId)) {
+    res.status(404).json({ error: "Portal bulunamadı" });
+    return null;
+  }
+  return portalId;
+}
+
+app.post(["/api/v1/portals/:portalId/session-open/start", "/api/portals/:portalId/session-open/start"], (req, res) => {
+  const portalId = validatePortalIdParam(req, res);
+  if (!portalId) return;
+  const result = engine.startPortalSession(portalId);
+  if (result.error) return res.status(409).json({ error: result.error });
+  res.json({ ok: true });
+});
+
+app.get(["/api/v1/portals/:portalId/session-open/status", "/api/portals/:portalId/session-open/status"], (req, res) => {
+  const portalId = validatePortalIdParam(req, res);
+  if (!portalId) return;
+  const status = engine.getPortalSessionStatus(portalId);
+  if (!status) return res.status(404).json({ error: "Oturum açma bulunamadı" });
+  res.json(status);
+});
+
+app.get(["/api/v1/portals/:portalId/session-open/live", "/api/portals/:portalId/session-open/live"], async (req, res, next) => {
+  try {
+    const portalId = validatePortalIdParam(req, res);
+    if (!portalId) return;
+    const buffer = await engine.screenshotPortalSession(portalId);
+    if (!buffer) return res.status(404).json({ error: "Canlı görüntü bulunamadı" });
+    res.set("Cache-Control", "no-store");
+    res.type("image/jpeg").send(buffer);
+  } catch (error) { next(error); }
+});
+
+app.post(["/api/v1/portals/:portalId/session-open/click", "/api/portals/:portalId/session-open/click"], async (req, res, next) => {
+  try {
+    const portalId = validatePortalIdParam(req, res);
+    if (!portalId) return;
+    const x = Number(req.body?.x);
+    const y = Number(req.body?.y);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return res.status(400).json({ error: "Geçersiz koordinat" });
+    const ok = await engine.clickPortalSession(portalId, x, y);
+    if (!ok) return res.status(409).json({ error: "Canlı oturum bulunamadı" });
+    res.json({ ok: true });
+  } catch (error) { next(error); }
+});
+
+app.post(["/api/v1/portals/:portalId/session-open/type", "/api/portals/:portalId/session-open/type"], async (req, res, next) => {
+  try {
+    const portalId = validatePortalIdParam(req, res);
+    if (!portalId) return;
+    const text = String(req.body?.text ?? "").slice(0, 200);
+    if (!text) return res.status(400).json({ error: "Metin boş olamaz" });
+    const ok = await engine.typePortalSession(portalId, text);
+    if (!ok) return res.status(409).json({ error: "Canlı oturum bulunamadı" });
+    res.json({ ok: true });
+  } catch (error) { next(error); }
+});
+
+app.post(["/api/v1/portals/:portalId/session-open/key", "/api/portals/:portalId/session-open/key"], async (req, res, next) => {
+  try {
+    const portalId = validatePortalIdParam(req, res);
+    if (!portalId) return;
+    const key = String(req.body?.key || "");
+    if (!/^[A-Za-z0-9]+$/.test(key)) return res.status(400).json({ error: "Geçersiz tuş" });
+    const ok = await engine.pressKeyPortalSession(portalId, key);
+    if (!ok) return res.status(409).json({ error: "Canlı oturum bulunamadı" });
+    res.json({ ok: true });
+  } catch (error) { next(error); }
+});
+
+app.post(["/api/v1/portals/:portalId/session-open/finish", "/api/portals/:portalId/session-open/finish"], (req, res) => {
+  const portalId = validatePortalIdParam(req, res);
+  if (!portalId) return;
+  const ok = engine.finishPortalSession(portalId);
+  if (!ok) return res.status(409).json({ error: "Canlı oturum bulunamadı" });
+  res.json({ ok: true });
 });
 
 app.get(["/api/v1/jobs", "/api/jobs"], (req, res) => res.json({ jobs: store.listJobs(30).map(publicJob), queue: queue.stats }));

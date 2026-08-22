@@ -321,6 +321,17 @@ export async function fillQuoteForm(target, job) {
   await humanPause();
   await fillMatbuVehicleFields(target, vehicle);
   await humanPause();
+  filled.usageType = await fillFirst(target, vehicle.usageType,
+    ['select[name*="kullanim" i]', 'select[name*="usage" i]', 'select[name*="kullanımtarz" i]'],
+    ["Kullanım Tarzı", "Kullanım Şekli", "Araç Kullanım Tarzı"]);
+  await humanPause();
+  const hasarsizlikKademesi = job.capturedFacts?.hasarsizlikKademesi?.value;
+  if (hasarsizlikKademesi) {
+    filled.hasarsizlikKademesi = await fillFirst(target, hasarsizlikKademesi,
+      ['select[name*="hasarsizlik" i]', 'select[name*="kademe" i]', 'input[name*="hasarsizlik" i]', 'input[name*="kademe" i]'],
+      ["Hasarsızlık Kademesi", "Hasarsızlık Basamağı"]);
+    await humanPause();
+  }
   await fillNameAndEmail(target, job);
   await acceptRequiredConsents(target);
   return filled;
@@ -335,13 +346,32 @@ async function waitUntilEnabled(locator, timeoutMs) {
   return false;
 }
 
+// Bazı sitelerde asıl "Teklif Al" düğmesinin yanında, eksik/varsayılan
+// veriyle özet bir teklif üreten "Hızlı Teklif Al" kısayolu da bulunuyor
+// (ör. Koalay). İkisi de aynı /Teklif(?:i)? Al/i deseniyle eşleştiğinden,
+// DOM sırasına göre yanlışlıkla kısayol tıklanabiliyor. Bu yüzden eşleşen
+// düğmeler arasında "hızlı/ekspres" içermeyeni önceliklendiriyoruz; asıl
+// düğme yoksa son çare olarak kısayola geri dönüyoruz.
+const SHORTCUT_BUTTON_PATTERN = /hızlı|quick|express|ekspres/i;
+
 export async function clickSubmit(target) {
   for (const name of [/Gönder/i, /Teklif(?:i)? Al/i, /Sorgula/i, /Devam/i, /Hemen Teklif/i, /Doğrula/i, /Onayla/i, /Fiyat(?:ları)? (?:Gör|Getir|Hesapla)/i, /Karşılaştır/i, /Teklifleri Görüntüle/i, /Devam Et/i, /İleri/i, /Hesapla/i]) {
     try {
-      const button = target.getByRole("button", { name }).first();
-      if (!await button.isVisible({ timeout: 500 })) continue;
-      if (await button.isEnabled({ timeout: 500 }) || await waitUntilEnabled(button, 2500)) {
-        await button.click({ timeout: 5000 });
+      const candidates = target.getByRole("button", { name });
+      const count = Math.min(await candidates.count().catch(() => 0), 6);
+      let shortcutFallback = null;
+      for (let index = 0; index < count; index += 1) {
+        const button = candidates.nth(index);
+        if (!await button.isVisible({ timeout: 500 }).catch(() => false)) continue;
+        const text = (await button.innerText({ timeout: 500 }).catch(() => "")).trim();
+        if (SHORTCUT_BUTTON_PATTERN.test(text)) { if (!shortcutFallback) shortcutFallback = button; continue; }
+        if (await button.isEnabled({ timeout: 500 }) || await waitUntilEnabled(button, 2500)) {
+          await button.click({ timeout: 5000 });
+          return true;
+        }
+      }
+      if (shortcutFallback && (await shortcutFallback.isEnabled({ timeout: 500 }) || await waitUntilEnabled(shortcutFallback, 2500))) {
+        await shortcutFallback.click({ timeout: 5000 });
         return true;
       }
     } catch {}
@@ -547,6 +577,24 @@ async function dismissLeadCaptureModal(target) {
   return true;
 }
 
+// Bazı portallar (İhsan altyapısı dahil) EGM sorgusu sırasında ekranda
+// "Hasarsızlık Kademesi" bilgisini gösteriyor. Bu bilgi Sigorta Kurdu gibi
+// başka bir sitenin kendi formunda AYRICA soruluyor olabilir; burada
+// yakalanan değer job üzerinde saklanıp, aynı sorgu içindeki diğer
+// portallar kendi adımlarını doldururken (bkz. fillQuoteForm) fırsat
+// bulunca kullanılıyor. Not: paralel çalışan portallar arasında sıralama
+// garantisi YOK; değer henüz yakalanmamışsa sessizce atlanır, uydurma veri
+// yazılmaz.
+const HASARSIZLIK_PATTERN = /HASARS[İIıi]ZL[İIıi]K\s*KADEMES[İIıi]\s*[:\-]?\s*(-?\d{1,2})/i;
+
+export function captureSharedFacts(job, text) {
+  if (!job || job.capturedFacts?.hasarsizlikKademesi) return;
+  const match = String(text).match(HASARSIZLIK_PATTERN);
+  if (!match) return;
+  job.capturedFacts = job.capturedFacts || {};
+  job.capturedFacts.hasarsizlikKademesi = { value: match[1], capturedAt: new Date().toISOString() };
+}
+
 export function pageState(text) {
   if (/(ÇOK FAZLA İSTEK|TOO MANY REQUESTS|RATE LIMIT|429)/i.test(text)) return "rate_limited";
   if (/(GİRİŞ YAP|OTURUM AÇ|KULLANICI ADI|ACENTE GİRİŞİ)/i.test(text) && /(ŞİFRE|PASSWORD)/i.test(text)) return "auth_required";
@@ -570,6 +618,7 @@ export async function waitForOutcome({ page, target, job, portal, resultTimeoutM
       continue;
     }
     const text = await visibleText(target);
+    captureSharedFacts(job, text);
     if (await detectCaptcha(page, text)) {
       if (typeof requestCaptchaSolve !== "function") {
         return { status: "manual_required", message: "CAPTCHA / güvenlik kontrolü kullanıcı tarafından tamamlanmalı" };

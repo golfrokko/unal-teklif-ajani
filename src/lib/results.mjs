@@ -16,6 +16,24 @@ function priceFromMatch(match) {
   return parseTry(match[1] || match[2]);
 }
 
+// Fiyatın hemen yanında genelde taksit bilgisi de yazıyor (ör. "12 Taksit",
+// "3x Taksit", "Peşin Fiyat"). Sitelere özel bir alan olmadığından, fiyat
+// eşleşmesinin etrafındaki dar bir pencerede metinle arıyoruz; bulunamazsa
+// alan boş bırakılır (uydurma veri gösterilmez).
+// Not: JS'nin /i bayrağı Türkçe noktalı İ ile düz i'yi eşleştirmiyor
+// (standart Unicode büyük/küçük harf katlamasında İ -> "i̇" olur, salt "i"
+// değil); bu yüzden İ/I/ı/i varyantlarının hepsini karakter sınıfıyla kapsıyoruz.
+const INSTALLMENT_PATTERN = /(\d{1,2})\s*(?:x\s*)?TAKS[İIıi]T/i;
+const CASH_ONLY_PATTERN = /PEŞ[İIıi]N(?:\s+F[İIıi]YAT)?/i;
+
+function installmentFromSegment(segment, matchIndex) {
+  const windowText = segment.slice(Math.max(0, matchIndex - 40), matchIndex + 80);
+  const installmentMatch = windowText.match(INSTALLMENT_PATTERN);
+  if (installmentMatch) return `${installmentMatch[1]} taksit`;
+  if (CASH_ONLY_PATTERN.test(windowText)) return "Peşin";
+  return null;
+}
+
 export function extractOffersFromText(text, portal) {
   const upper = String(text).toLocaleUpperCase("tr-TR");
   const offers = [];
@@ -69,6 +87,7 @@ export function extractOffersFromText(text, portal) {
     if (!chosen) continue;
     const price = priceFromMatch(chosen);
     if (!price) continue;
+    const installments = installmentFromSegment(segment, chosen.index);
     offers.push({
       company,
       price,
@@ -77,6 +96,7 @@ export function extractOffersFromText(text, portal) {
       sourcePortal: portal.name,
       sourceUrl: portal.url,
       capturedAt: new Date().toISOString(),
+      ...(installments ? { installments } : {}),
     });
   }
   return deduplicateOffers(offers);

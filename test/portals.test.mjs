@@ -2,8 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { portals } from "../src/portals.mjs";
 
-test("29 portalın SMS politikası tanımlıdır", () => {
-  assert.equal(portals.length, 29);
+test("26 portalın SMS politikası tanımlıdır", () => {
+  assert.equal(portals.length, 26);
   const validPolicies = new Set(["none", "per_query", "session_once", "unknown"]);
   for (const portal of portals) {
     assert.ok(validPolicies.has(portal.smsPolicy), `${portal.id} SMS politikası geçersiz`);

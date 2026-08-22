@@ -57,6 +57,7 @@
           <label>Model yılı<input id="year" inputmode="numeric" maxlength="4" /></label>
           <label>Şasi no <small>İsteğe bağlı</small><input id="chassis" /></label>
           <label>Motor no <small>İsteğe bağlı</small><input id="engine" /></label>
+          <label>Kullanım tarzı <small>İsteğe bağlı</small><input id="usage-type" placeholder="Hususi" /></label>
         </div>
         <div class="ruhsat-scan">
           <label class="ruhsat-scan-button" for="ruhsat-photo"><span>📷</span> Ruhsat fotoğrafı çek / QR okut</label>
@@ -93,9 +94,29 @@
     </section>
 
     <section class="card portal-section" id="portals">
-      <div class="section-head"><div><span class="eyebrow orange">PORTAL HAVUZU</span><h3>Teklif kaynakları</h3><p>Yalnız canlı adaptörü hazır portallar seçilebilir; diğerleri hazırlandıkça açılır.</p></div><div class="portal-actions"><button id="select-all" type="button">Tüm hazırları seç</button><button id="check-sessions" type="button" title="İhsan altyapılı sitelerde oturumun açık olup olmadığını kontrol eder">Oturumları Sorgula</button><button id="select-ihsan" type="button">Yalnız İhsan</button><button id="select-none" type="button">Temizle</button><button id="reset-sessions" type="button" title="Kayıtlı portal oturumlarını sil; sonraki sorguda yeniden giriş yapılır">Oturumları sıfırla</button></div></div>
+      <div class="section-head"><div><span class="eyebrow orange">PORTAL HAVUZU</span><h3>Teklif kaynakları</h3><p>Yalnız canlı adaptörü hazır portallar seçilebilir; diğerleri hazırlandıkça açılır.</p></div><div class="portal-actions"><button id="select-all" type="button">Tüm hazırları seç</button><button id="check-sessions" type="button" title="İhsan altyapılı sitelerde oturumun açık olup olmadığını kontrol eder">Oturumları Sorgula</button><button id="open-sessions" type="button" title="Seçtiğiniz portallara sağ üstten kalıcı olarak giriş yapmanızı sağlar; sorgu öncesinde bir kez yapılır">Oturum Aç</button><button id="select-ihsan" type="button">Yalnız İhsan</button><button id="select-none" type="button">Temizle</button><button id="reset-sessions" type="button" title="Kayıtlı portal oturumlarını sil; sonraki sorguda yeniden giriş yapılır">Oturumları sıfırla</button></div></div>
       <p id="session-check-status" class="session-check-status hidden"></p>
       <div id="portal-groups" class="portal-groups"></div>
+    </section>
+
+    <section class="card open-session-panel hidden" id="open-session-panel">
+      <div class="section-head">
+        <div><span class="eyebrow orange">OTURUM AÇ</span><h3 id="open-session-title">Portala giriş yapılıyor</h3><p id="open-session-subtitle">Sağ üstten "Hesap" ile giriş yapıp şifrenizi yazın; bittiğinde "Bu portalı bitir"e basın.</p></div>
+        <button id="open-session-cancel" type="button" class="cancel-button">Oturum açmayı durdur</button>
+      </div>
+      <div class="open-session-queue" id="open-session-queue"></div>
+      <div class="open-session-live-wrap"><img id="open-session-live-image" class="open-session-live-image" alt="Canlı portal ekranı" /></div>
+      <div class="open-session-type-row">
+        <input id="open-session-type-input" type="text" placeholder="Yazmak istediğiniz metni buraya yazıp Gönder'e basın (kullanıcı adı, şifre vb.)" autocomplete="off" />
+        <button id="open-session-type-send" type="button">Gönder</button>
+        <button id="open-session-key-enter" type="button" title="Enter tuşuna bas">Enter</button>
+        <button id="open-session-key-tab" type="button" title="Tab tuşuna bas">Tab</button>
+        <button id="open-session-key-backspace" type="button" title="Backspace tuşuna bas">⌫</button>
+      </div>
+      <div class="open-session-footer">
+        <span id="open-session-status">Hazırlanıyor…</span>
+        <button id="open-session-finish" type="button" class="primary-thin">Bu portalı bitir, sonrakine geç</button>
+      </div>
     </section>
 
     <section class="card progress-section hidden" id="progress">
@@ -104,8 +125,8 @@
     </section>
 
     <section class="card results-section hidden" id="results">
-      <div class="section-head"><div><span class="eyebrow orange">TEK LİSTE</span><h3>Tüm şirket teklifleri</h3><p>Aynı şirket birden fazla portaldan geldiyse en ucuz fiyat üstte gösterilir.</p></div><b id="result-count" class="result-count">0 şirket</b></div>
-      <div class="table-wrap"><table><thead><tr><th>#</th><th>Sigorta şirketi</th><th>En düşük prim</th><th>En iyi kaynak</th><th>Kaynak sayısı</th></tr></thead><tbody id="results-body"></tbody></table></div>
+      <div class="section-head"><div><span class="eyebrow orange">TEK LİSTE</span><h3>Tüm şirket teklifleri</h3><p>Aynı şirket birden fazla portaldan geldiyse en ucuz fiyat üstte gösterilir. Tüm fiyatları görmek için şirket satırına tıklayın.</p></div><b id="result-count" class="result-count">0 şirket</b></div>
+      <div class="table-wrap"><table><thead><tr><th>#</th><th>Sigorta şirketi</th><th>En düşük prim</th><th>Taksit</th><th>En iyi kaynak</th><th>Kaynak sayısı</th></tr></thead><tbody id="results-body"></tbody></table></div>
     </section>
   </main>
 

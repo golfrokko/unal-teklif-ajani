@@ -17,6 +17,7 @@ export function publicJob(job) {
     phone: job.phone,
     vehicle: job.vehicle,
     portalStates: job.portalStates,
+    capturedFacts: job.capturedFacts || null,
     results: job.results || [],
     summary: summarizeResults(job.results || []),
     failure: job.failure || null,

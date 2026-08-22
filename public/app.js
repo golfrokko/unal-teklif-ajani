@@ -5,6 +5,7 @@ Plaka: 78 SR 283
 Ruhsat Seri No: AB123456
 Araç: HYUNDAI ACCENT ERA 1.4
 Model Yılı: 2008
+Kullanım Tarzı: Hususi
 E-posta: ahmet.yilmaz@example.com`;
 
 const statusNames = {
@@ -36,12 +37,16 @@ const statusNames = {
 };
 
 const elements = Object.fromEntries([
-  "raw-data", "full-name", "identity", "birth-date", "plate", "registration", "vehicle", "year", "chassis", "engine",
+  "raw-data", "full-name", "identity", "birth-date", "plate", "registration", "vehicle", "year", "chassis", "engine", "usage-type",
   "phone", "email", "consent", "start-button", "parse-status", "portal-groups", "progress", "progress-list",
   "progress-title", "progress-subtitle", "job-status", "cancel-button", "log", "log-list", "log-count",
   "error-log", "error-log-list", "error-log-count", "session-check-status",
   "results", "results-body", "result-count", "otp-dock",
-  "otp-cards", "otp-count", "error-banner", "portal-count", "max-concurrency", "concurrency-stat"
+  "otp-cards", "otp-count", "error-banner", "portal-count", "max-concurrency", "concurrency-stat",
+  "open-session-panel", "open-session-title", "open-session-subtitle", "open-session-cancel",
+  "open-session-queue", "open-session-live-image", "open-session-type-input", "open-session-type-send",
+  "open-session-key-enter", "open-session-key-tab", "open-session-key-backspace",
+  "open-session-status", "open-session-finish",
 ].map((id) => [id, document.getElementById(id)]));
 
 let portals = [];
@@ -60,6 +65,10 @@ let loggedJobStatus = null;
 const loggedPortalUpdates = new Map();
 let techLog = [];
 const loggedTechPortalUpdates = new Map();
+const expandedResultCompanies = new Set();
+let openSessionQueue = [];
+let openSessionIndex = -1;
+let openSessionPollTimer = null;
 
 function rememberActiveJob(jobId) {
   activeJobId = jobId || null;
@@ -194,6 +203,7 @@ function parseVehicleData(raw) {
     year: raw.match(/(?:model\s*yılı|model\s*yili|yıl|yil)[^0-9]*(19\d{2}|20\d{2})/i)?.[1] || "",
     chassis: raw.match(/(?:şasi|sasi)(?:\s+no|\s+numarası)?[^A-Z0-9]*([A-Z0-9]{8,20})/i)?.[1]?.toUpperCase() || "",
     engine: raw.match(/(?:motor)(?:\s+no|\s+numarası)?[^A-Z0-9]*([A-Z0-9]{5,20})/i)?.[1]?.toUpperCase() || "",
+    usageType: raw.match(/(?:kullanım\s*tarz[ıi]|kullanim\s*tarz[ıi]|kullanım\s*şekli|kullanim\s*sekli)[^:\n]*:\s*([^\n]{2,40})/i)?.[1]?.trim() || "",
     email: raw.match(/[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/i)?.[0]?.toLowerCase() || "",
   };
 }
@@ -208,6 +218,7 @@ function setParsed(data) {
   elements.year.value = data.year || "";
   elements.chassis.value = data.chassis || "";
   elements.engine.value = data.engine || "";
+  elements["usage-type"].value = data.usageType || "";
   if (data.email) elements.email.value = data.email;
   const count = Object.values(data).filter(Boolean).length;
   elements["parse-status"].textContent = `${count} alan algılandı`;
@@ -224,6 +235,7 @@ function getVehicle() {
     year: elements.year.value,
     chassis: elements.chassis.value,
     engine: elements.engine.value,
+    usageType: elements["usage-type"].value,
   };
 }
 
@@ -297,7 +309,11 @@ function renderPortals({ preserveSelection = false } = {}) {
           const sessionBadge = portal.smsPolicy === "session_once"
             ? `<em class="session-badge" data-state="${portal.sessionLoggedIn === true ? "on" : portal.sessionLoggedIn === false ? "off" : "unknown"}" title="${escapeHtml(portal.sessionMessage || "")}">${portal.sessionLoggedIn === true ? "● Bağlı" : portal.sessionLoggedIn === false ? "● Bağlı değil" : "○ Kontrol edilmedi"}${portal.sessionCheckedAt ? ` · ${relativeTime(portal.sessionCheckedAt)}` : ""}</em>`
             : "";
-          return `<label class="portal-check" title="${escapeHtml(portal.probeMessage || portal.smsEvidence || "")}"><input type="checkbox" value="${escapeHtml(portal.id)}" ${checked ? "checked" : ""} ${available ? "" : "disabled"} /><span></span><div><strong>${escapeHtml(portal.name)}</strong><small>${escapeHtml(readiness)}<br />${escapeHtml(smsLabels[portal.smsPolicy] || smsLabels.unknown)}</small>${sessionBadge}</div></label>`;
+          const screenshotKind = portal.sessionHasScreenshot ? "session" : (portal.probeHasScreenshot ? "probe" : null);
+          const screenshotLink = screenshotKind
+            ? `<a class="portal-screenshot-link" href="/api/portals/${encodeURIComponent(portal.id)}/screenshot/${screenshotKind}?t=${Date.now()}" target="_blank" rel="noopener" title="Hata anındaki ekran görüntüsü">📷 Ekran görüntüsü</a>`
+            : "";
+          return `<label class="portal-check" title="${escapeHtml(portal.probeMessage || portal.smsEvidence || "")}"><input type="checkbox" value="${escapeHtml(portal.id)}" ${checked ? "checked" : ""} ${available ? "" : "disabled"} /><span></span><div><strong>${escapeHtml(portal.name)}</strong><small>${escapeHtml(readiness)}<br />${escapeHtml(smsLabels[portal.smsPolicy] || smsLabels.unknown)}</small>${sessionBadge}${screenshotLink}</div></label>`;
         }).join("")}
       </div>
     </article>
@@ -427,15 +443,92 @@ function formatTry(value) {
   return new Intl.NumberFormat("tr-TR", { style: "currency", currency: "TRY", minimumFractionDigits: 2 }).format(value);
 }
 
+// Şirket logoları: gerçek logo dosyaları için public/logos/<slug>.png bekleniyor
+// (bu sanal ortamda dışa ağ erişimi olmadığından gerçek logo görselleri elle
+// eklenmedi). Dosya yoksa <img onerror> tetiklenip yerine renkli baş harf
+// rozeti gösteriliyor; ileride gerçek logo dosyaları buraya eklenirse
+// otomatik olarak kullanılır.
+const COMPANY_LOGO_SLUGS = {
+  "AKSİGORTA": "aksigorta", "ALLIANZ": "allianz", "ANADOLU SİGORTA": "anadolu",
+  "ANKARA SİGORTA": "ankara", "ATLAS MUTUEL": "atlas", "AXA SİGORTA": "axa",
+  "BEREKET SİGORTA": "bereket", "CORPUS SİGORTA": "corpus", "DOĞA SİGORTA": "doga",
+  "ETHICA SİGORTA": "ethica", "EUREKO SİGORTA": "eureko", "GENERALI": "generali",
+  "HDI SİGORTA": "hdi", "HEPİYİ SİGORTA": "hepiyi", "KORU SİGORTA": "koru",
+  "MAGDEBURGER": "magdeburger", "MAPFRE SİGORTA": "mapfre", "NEOVA SİGORTA": "neova",
+  "ORİENT SİGORTA": "orient", "QUICK SİGORTA": "quick", "RAY SİGORTA": "ray",
+  "SOMPO SİGORTA": "sompo", "TÜRK NİPPON": "turknippon", "TÜRKİYE SİGORTA": "turkiye",
+  "UNICO SİGORTA": "unico", "ZURICH SİGORTA": "zurich",
+};
+
+function companyLogoSlug(company) {
+  return COMPANY_LOGO_SLUGS[company] || String(company).toLocaleLowerCase("tr").replace(/[^a-z0-9]+/g, "");
+}
+
+function companyInitials(company) {
+  const words = String(company).replace(/SİGORTA|SIGORTA/gi, "").trim().split(/\s+/).filter(Boolean);
+  return (words.slice(0, 2).map((word) => word[0]).join("") || String(company)[0] || "?").toUpperCase();
+}
+
+function companyLogoColor(company) {
+  let hash = 0;
+  for (const character of String(company)) hash = (hash * 31 + character.charCodeAt(0)) >>> 0;
+  return `hsl(${hash % 360} 55% 40%)`;
+}
+
+function companyLogoHtml(company) {
+  const slug = escapeHtml(companyLogoSlug(company));
+  const initials = escapeHtml(companyInitials(company));
+  const color = companyLogoColor(company);
+  return `<span class="company-logo" data-fallback="${initials}" style="background:${color}"><img src="/logos/${slug}.png" alt="" loading="lazy" onerror="this.style.display='none';this.parentElement.classList.add('logo-fallback')" /></span>`;
+}
+
 function renderResults(job) {
   const rows = job.summary || [];
   if (!rows.length && job.status !== "completed") return;
   elements.results.classList.remove("hidden");
   elements["result-count"].textContent = `${rows.length} şirket`;
+  const currentCompanies = new Set(rows.map((row) => row.company));
+  for (const company of [...expandedResultCompanies]) {
+    if (!currentCompanies.has(company)) expandedResultCompanies.delete(company);
+  }
   elements["results-body"].innerHTML = rows.length ? rows.map((row, index) => {
-    const best = row.sources.find((source) => source.price === row.bestPrice) || row.sources[0];
-    return `<tr><td>${index + 1}</td><td><strong>${row.company}</strong></td><td class="price">${formatTry(row.bestPrice)}</td><td>${best.sourcePortal}</td><td>${row.sources.length} portal</td></tr>`;
-  }).join("") : `<tr><td colspan="5">Henüz fiyat teklifi alınamadı. Portal durumlarını kontrol edin.</td></tr>`;
+    const sorted = [...row.sources].sort((a, b) => a.price - b.price);
+    const best = sorted[0] || row.sources[0];
+    const company = escapeHtml(row.company);
+    const expandable = row.sources.length > 1;
+    const expanded = expandable && expandedResultCompanies.has(row.company);
+    const toggleLabel = expandable ? `${row.sources.length} portal <span class="result-caret">${expanded ? "▴" : "▾"}</span>` : `${row.sources.length} portal`;
+    const detailRows = sorted.map((source) => `
+      <tr class="result-detail-row">
+        <td></td>
+        <td>${escapeHtml(source.sourcePortal)}</td>
+        <td class="price">${formatTry(source.price)}</td>
+        <td>${source.installments ? escapeHtml(source.installments) : ""}</td>
+        <td colspan="2">${source.capturedAt ? relativeTime(source.capturedAt) : ""}</td>
+      </tr>`).join("");
+    return `
+      <tr class="result-row ${expandable ? "expandable" : ""}" data-company="${company}">
+        <td>${index + 1}</td><td><div class="company-cell">${companyLogoHtml(row.company)}<strong>${company}</strong></div></td><td class="price">${formatTry(row.bestPrice)}</td><td class="installments">${best.installments ? escapeHtml(best.installments) : "<span class=\"muted\">—</span>"}</td><td>${escapeHtml(best.sourcePortal)}</td><td class="result-toggle">${toggleLabel}</td>
+      </tr>
+      ${expandable ? `<tr class="result-detail-wrap ${expanded ? "" : "hidden"}" data-company-detail="${company}"><td colspan="6"><table class="result-detail-table"><tbody>${detailRows}</tbody></table></td></tr>` : ""}`;
+  }).join("") : `<tr><td colspan="6">Henüz fiyat teklifi alınamadı. Portal durumlarını kontrol edin.</td></tr>`;
+}
+
+function toggleResultDetail(event) {
+  const row = event.currentTarget;
+  if (!row.classList.contains("expandable")) return;
+  const company = row.dataset.company;
+  const detail = elements["results-body"].querySelector(`.result-detail-wrap[data-company-detail="${CSS.escape(company)}"]`);
+  if (!detail) return;
+  if (expandedResultCompanies.has(company)) {
+    expandedResultCompanies.delete(company);
+    detail.classList.add("hidden");
+  } else {
+    expandedResultCompanies.add(company);
+    detail.classList.remove("hidden");
+  }
+  const caret = row.querySelector(".result-caret");
+  if (caret) caret.textContent = expandedResultCompanies.has(company) ? "▴" : "▾";
 }
 
 function showInlineError(form, portalId, message) {
@@ -742,6 +835,152 @@ document.getElementById("check-sessions").addEventListener("click", async (event
   }
 });
 
+// "Oturum Aç": kullanıcının sorgu öncesinde İhsan altyapılı portallara
+// sağ üstten "Hesap" ile kalıcı olarak giriş yapmasını sağlar. Portallar
+// sırayla açılır; canlı ekrana tıklama CAPTCHA panelindeki mekanizmayla
+// aynı ölçeklemeyi kullanır, ayrıca kullanıcı adı/şifre yazmak için metin
+// ve tuş iletimi de eklenir.
+function stopOpenSessionPolling() {
+  if (openSessionPollTimer) { window.clearInterval(openSessionPollTimer); openSessionPollTimer = null; }
+}
+
+function renderOpenSessionQueue(currentPortalId) {
+  elements["open-session-queue"].innerHTML = openSessionQueue.map((portalId) => {
+    const portal = portals.find((item) => item.id === portalId);
+    const name = escapeHtml(portal?.name || portalId);
+    const state = portalId === currentPortalId ? "active" : (openSessionQueue.indexOf(portalId) < openSessionIndex ? "done" : "pending");
+    return `<span class="open-session-chip" data-state="${state}">${name}</span>`;
+  }).join("");
+}
+
+async function pollOpenSessionStatus(portalId) {
+  try {
+    const status = await fetchJson(`/api/portals/${encodeURIComponent(portalId)}/session-open/status`, {}, 8000);
+    elements["open-session-status"].textContent = status.message || status.status;
+    if (status.status === "ready" || status.status === "opening") {
+      elements["open-session-live-image"].src = `/api/portals/${encodeURIComponent(portalId)}/session-open/live?t=${Date.now()}`;
+    }
+    if (status.status === "closed" || status.status === "error") {
+      stopOpenSessionPolling();
+      if (status.status === "error") showError(`Oturum açma hatası: ${status.message}`);
+      await advanceOpenSessionQueue();
+    }
+  } catch (error) {
+    // Geçici ağ hatası; bir sonraki pollde tekrar denenecek.
+  }
+}
+
+async function startCurrentOpenSession() {
+  const portalId = openSessionQueue[openSessionIndex];
+  const portal = portals.find((item) => item.id === portalId);
+  elements["open-session-title"].textContent = `${portal?.name || portalId} — oturum açılıyor`;
+  elements["open-session-status"].textContent = "Portal açılıyor…";
+  elements["open-session-live-image"].removeAttribute("src");
+  renderOpenSessionQueue(portalId);
+  try {
+    await fetchJson(`/api/portals/${encodeURIComponent(portalId)}/session-open/start`, { method: "POST" }, 15000);
+    stopOpenSessionPolling();
+    openSessionPollTimer = window.setInterval(() => pollOpenSessionStatus(portalId), 900);
+    await pollOpenSessionStatus(portalId);
+  } catch (error) {
+    showError(`${portal?.name || portalId}: ${error.message}`);
+    await advanceOpenSessionQueue();
+  }
+}
+
+async function advanceOpenSessionQueue() {
+  openSessionIndex += 1;
+  if (openSessionIndex >= openSessionQueue.length) {
+    stopOpenSessionPolling();
+    elements["open-session-panel"].classList.add("hidden");
+    openSessionQueue = [];
+    openSessionIndex = -1;
+    try {
+      const body = await fetchJson("/api/sessions/check", { method: "POST" }, 120000);
+      portals = body.portals;
+      renderPortals({ preserveSelection: true });
+    } catch {}
+    return;
+  }
+  await startCurrentOpenSession();
+}
+
+document.getElementById("open-sessions").addEventListener("click", () => {
+  const candidates = portals.filter((portal) => portal.smsPolicy === "session_once" && (portal.available ?? portal.enabled));
+  const selectedIds = new Set(selectedPortalIds());
+  const targeted = candidates.filter((portal) => selectedIds.has(portal.id));
+  openSessionQueue = (targeted.length ? targeted : candidates).map((portal) => portal.id);
+  if (!openSessionQueue.length) return showError("Oturum açılabilecek portal bulunamadı.");
+  openSessionIndex = -1;
+  elements["open-session-panel"].classList.remove("hidden");
+  elements["open-session-panel"].scrollIntoView({ behavior: "smooth", block: "start" });
+  advanceOpenSessionQueue();
+});
+
+elements["open-session-live-image"].addEventListener("click", async (event) => {
+  const portalId = openSessionQueue[openSessionIndex];
+  if (!portalId) return;
+  const rect = event.currentTarget.getBoundingClientRect();
+  const x = Math.round(((event.clientX - rect.left) / rect.width) * CAPTCHA_VIEWPORT.width);
+  const y = Math.round(((event.clientY - rect.top) / rect.height) * CAPTCHA_VIEWPORT.height);
+  try {
+    await fetchJson(`/api/portals/${encodeURIComponent(portalId)}/session-open/click`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ x, y })
+    }, 8000);
+    elements["open-session-live-image"].src = `/api/portals/${encodeURIComponent(portalId)}/session-open/live?t=${Date.now()}`;
+  } catch (error) { showError(error.message); }
+});
+
+async function sendOpenSessionText() {
+  const portalId = openSessionQueue[openSessionIndex];
+  const input = elements["open-session-type-input"];
+  if (!portalId || !input.value) return;
+  try {
+    await fetchJson(`/api/portals/${encodeURIComponent(portalId)}/session-open/type`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: input.value })
+    }, 8000);
+    input.value = "";
+    input.focus();
+  } catch (error) { showError(error.message); }
+}
+
+async function sendOpenSessionKey(key) {
+  const portalId = openSessionQueue[openSessionIndex];
+  if (!portalId) return;
+  try {
+    await fetchJson(`/api/portals/${encodeURIComponent(portalId)}/session-open/key`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ key })
+    }, 8000);
+  } catch (error) { showError(error.message); }
+}
+
+elements["open-session-type-send"].addEventListener("click", sendOpenSessionText);
+elements["open-session-type-input"].addEventListener("keydown", (event) => {
+  if (event.key === "Enter") { event.preventDefault(); sendOpenSessionText(); }
+});
+elements["open-session-key-enter"].addEventListener("click", () => sendOpenSessionKey("Enter"));
+elements["open-session-key-tab"].addEventListener("click", () => sendOpenSessionKey("Tab"));
+elements["open-session-key-backspace"].addEventListener("click", () => sendOpenSessionKey("Backspace"));
+
+elements["open-session-finish"].addEventListener("click", async () => {
+  const portalId = openSessionQueue[openSessionIndex];
+  if (!portalId) return;
+  try {
+    await fetchJson(`/api/portals/${encodeURIComponent(portalId)}/session-open/finish`, { method: "POST" }, 8000);
+  } catch (error) { showError(error.message); }
+});
+
+elements["open-session-cancel"].addEventListener("click", async () => {
+  const portalId = openSessionQueue[openSessionIndex];
+  stopOpenSessionPolling();
+  if (portalId) {
+    try { await fetchJson(`/api/portals/${encodeURIComponent(portalId)}/session-open/finish`, { method: "POST" }, 8000); } catch {}
+  }
+  elements["open-session-panel"].classList.add("hidden");
+  openSessionQueue = [];
+  openSessionIndex = -1;
+});
+
 document.getElementById("ruhsat-photo").addEventListener("change", async (event) => {
   const file = event.target.files?.[0];
   const statusEl = document.getElementById("ruhsat-scan-status");
@@ -768,6 +1007,11 @@ document.getElementById("ruhsat-photo").addEventListener("change", async (event)
   } finally {
     event.target.value = "";
   }
+});
+
+elements["results-body"].addEventListener("click", (event) => {
+  const row = event.target.closest(".result-row");
+  if (row) toggleResultDetail({ currentTarget: row });
 });
 
 boot();

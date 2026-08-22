@@ -2,6 +2,7 @@ import { extractOffersFromText } from "../../lib/results.mjs";
 import { RESEND_SENTINEL } from "../../lib/validation.mjs";
 import {
   acceptRequiredConsents,
+  captureSharedFacts,
   clickNamedButton,
   clickSubmit,
   detectCaptcha,
@@ -23,6 +24,18 @@ const BLOCK_PATTERN = /(SORRY, YOU HAVE BEEN BLOCKED|YOU ARE UNABLE TO ACCESS|AC
 const VALIDATION_PATTERN = /(LÜTFEN GEÇERLİ|BU ALAN ZORUNLUDUR|ALANI ZORUNLUDUR|DEVAM ETMEK İÇİN BU ALANI|EKSİK BİLGİ)/i;
 const RESULT_PROGRESS_PATTERN = /(TEKLİF SONUÇLARI|TEKLİFLER SORGULANIYOR|SORGULAMA DURUMU|FİYATLAR HAZIRLANIYOR|ŞİRKETLERDEN TEKLİF)/i;
 const SESSION_SMS_PATTERN = /(SMS|TEK KULLANIMLIK|DOĞRULAMA KODU|ONAY KODU|CEP TELEFONUNUZA)/i;
+
+// İhsan altyapısı birden çok markayı (Lion, Sert, Bi Tıkla, İskenderun vb.)
+// aynı paylaşımlı sunucu üzerinden çalıştırıyor. Sunucu aynı anda çok fazla
+// sorgu görürse "rate_limited" durumunu tetikliyor; bu durumda kullanıcı
+// az bekleyip tekrar denerse sorgu genelde kısa süre içinde oluşuyor. Panelde
+// bunu net bir bekleme mesajıyla göstermek, kullanıcının "hata" sanıp
+// portalı tekrar tekrar denemesini önlüyor.
+export const DETECTED_STATE_MESSAGES = {
+  no_offer: "Portal teklif bulunamadığını bildirdi",
+  rate_limited: "İhsan altyapısı paylaşımlı; yoğunluktan bu sorgu reddedildi. Sorgu yaklaşık 1 dakika sonra oluşturulacak, birazdan tekrar deneyin.",
+  auth_required: "Portal oturumu açılmalı",
+};
 
 function normalize(value) {
   return String(value || "")
@@ -467,6 +480,7 @@ async function waitForIhsanOutcome({ page, target, job, portal, resultTimeoutMs,
   while (Date.now() - startedAt < resultTimeoutMs) {
     if (isCancelled()) return { status: "cancelled", message: "Sorgu iptal edildi" };
     const text = await visibleText(target);
+    captureSharedFacts(job, text);
     if (BLOCK_PATTERN.test(text)) return { status: "access_blocked", message: "Portal güvenlik duvarı bu sunucunun erişimini engelledi" };
     if (await detectCaptcha(page, text)) {
       if (typeof requestCaptchaSolve !== "function") {
@@ -487,7 +501,7 @@ async function waitForIhsanOutcome({ page, target, job, portal, resultTimeoutMs,
       }
     }
     const detectedState = pageState(text);
-    if (detectedState) return { status: detectedState, message: detectedState === "no_offer" ? "Portal teklif bulunamadığını bildirdi" : "Portal oturum veya hız sınırı bildirdi" };
+    if (detectedState) return { status: detectedState, message: DETECTED_STATE_MESSAGES[detectedState] || "Portal oturum veya hız sınırı bildirdi" };
 
     const otpInput = await findOtpInput(target);
     const smsLanguage = SESSION_SMS_PATTERN.test(text);

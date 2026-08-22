@@ -49,6 +49,15 @@ export class QueryEngine {
   #inputWaiters = new Map();
   #livePages = new Map();
   #ihsanSmsGate;
+  // "Oturum Aç": sorgu öncesinde, kullanıcının bir portala kendi elleriyle
+  // (kalıcı olarak) giriş yapmasını sağlayan canlı oturum akışı. Job'a bağlı
+  // değildir; portalId ile anahtarlanır. #openSessionPages canlı Playwright
+  // Page referanslarını, #openSessionWaiters "bitti" sinyalini bekleyen
+  // resolve fonksiyonlarını, #openSessionStatus ise panelin gösterdiği
+  // durum metnini tutar.
+  #openSessionPages = new Map();
+  #openSessionWaiters = new Map();
+  #openSessionStatus = new Map();
 
   constructor({ store, events, browserManager, portalRegistry, config, paths }) {
     this.store = store;
@@ -114,21 +123,38 @@ export class QueryEngine {
   async probePortal(portal, { navigationTimeoutMs } = {}) {
     const adapter = getAdapter(portal);
     if (typeof adapter.probe !== "function") return { state: "unsupported", message: "Bu adaptörde form teşhisi yok" };
-    return this.browserManager.withPortalPage(portal, (page) => adapter.probe({
-      page,
-      portal,
-      navigationTimeoutMs: navigationTimeoutMs || portal.navigationTimeoutMs || this.config.navigationTimeoutMs,
-    }));
+    return this.browserManager.withPortalPage(portal, async (page) => {
+      try {
+        return await adapter.probe({
+          page,
+          portal,
+          navigationTimeoutMs: navigationTimeoutMs || portal.navigationTimeoutMs || this.config.navigationTimeoutMs,
+        });
+      } catch (error) {
+        // Sayfa hâlâ açıkken (ör. CAPTCHA/güvenlik engeli görünürken) ekran
+        // görüntüsü alınabiliyorsa portal havuzunda teşhis için gösterilir.
+        const message = safeMessage(error, 240);
+        const hasScreenshot = await this.#captureScreenshot(page, "probe", portal.id);
+        return { state: /Timeout/i.test(message) ? "timeout" : "error", message, hasScreenshot };
+      }
+    });
   }
 
   async checkPortalSession(portal, { navigationTimeoutMs } = {}) {
     const adapter = getAdapter(portal);
     if (typeof adapter.checkSession !== "function") return { loggedIn: null, message: "Bu portal için oturum kavramı yok" };
-    return this.browserManager.withPortalPage(portal, (page) => adapter.checkSession({
-      page,
-      portal,
-      navigationTimeoutMs: navigationTimeoutMs || portal.navigationTimeoutMs || this.config.navigationTimeoutMs,
-    }));
+    return this.browserManager.withPortalPage(portal, async (page) => {
+      try {
+        return await adapter.checkSession({
+          page,
+          portal,
+          navigationTimeoutMs: navigationTimeoutMs || portal.navigationTimeoutMs || this.config.navigationTimeoutMs,
+        });
+      } catch (error) {
+        const hasScreenshot = await this.#captureScreenshot(page, "session", portal.id);
+        return { loggedIn: null, message: safeMessage(error, 200), hasScreenshot };
+      }
+    });
   }
 
   submitOtp(jobId, portalId, code) {
@@ -175,6 +201,78 @@ export class QueryEngine {
 
   async screenshotLivePage(jobId, portalId) {
     const page = this.#livePages.get(`${jobId}:${portalId}`);
+    if (!page) return null;
+    return page.screenshot({ type: "jpeg", quality: 60, timeout: 4000 }).catch(() => null);
+  }
+
+  // "Oturum Aç": bu, checkPortalSession/probePortal gibi salt okunur ve kısa
+  // ömürlü değil; kullanıcı "bitti" demeden kapanmayan, kalıcı giriş yapmayı
+  // amaçlayan CANLI bir tarayıcı sayfası açar. browserManager.withPortalPage
+  // zaten callback dönünce (portal.fresh olmadığı sürece) storageState'i
+  // diske kaydediyor; biz de callback'i kullanıcı "bitti" deyip
+  // finishPortalSession çağırana kadar bekleterek bu mekanizmayı olduğu gibi
+  // kullanıyoruz — ayrı bir oturum kaydetme kodu yazmaya gerek yok.
+  startPortalSession(portalId) {
+    const portal = this.portalRegistry.get(portalId);
+    if (!portal) return { error: "Portal bulunamadı" };
+    if (this.#openSessionWaiters.has(portalId)) return { error: "Bu portal için oturum açma zaten çalışıyor" };
+    const statusEntry = { status: "opening", message: "Portal açılıyor…", startedAt: new Date().toISOString() };
+    this.#openSessionStatus.set(portalId, statusEntry);
+    this.browserManager.withPortalPage(portal, async (page) => {
+      await page.goto(portal.url, { waitUntil: "domcontentloaded", timeout: this.config.navigationTimeoutMs });
+      this.#openSessionPages.set(portalId, page);
+      statusEntry.status = "ready";
+      statusEntry.message = "Sağ üstten hesabınıza giriş yapın; bittiğinde \"Bu portalı bitir\"e basın";
+      await new Promise((resolve) => this.#openSessionWaiters.set(portalId, resolve));
+      statusEntry.status = "saving";
+      statusEntry.message = "Oturum kaydediliyor…";
+    }).then(() => {
+      statusEntry.status = "closed";
+      statusEntry.message = "Oturum kaydedildi";
+    }).catch((error) => {
+      statusEntry.status = "error";
+      statusEntry.message = safeMessage(error, 200);
+    }).finally(() => {
+      this.#openSessionPages.delete(portalId);
+      this.#openSessionWaiters.delete(portalId);
+    });
+    return { ok: true };
+  }
+
+  getPortalSessionStatus(portalId) {
+    return this.#openSessionStatus.get(portalId) || null;
+  }
+
+  finishPortalSession(portalId) {
+    const resolve = this.#openSessionWaiters.get(portalId);
+    if (!resolve) return false;
+    resolve();
+    return true;
+  }
+
+  async clickPortalSession(portalId, x, y) {
+    const page = this.#openSessionPages.get(portalId);
+    if (!page) return false;
+    await page.mouse.click(x, y).catch(() => {});
+    return true;
+  }
+
+  async typePortalSession(portalId, text) {
+    const page = this.#openSessionPages.get(portalId);
+    if (!page) return false;
+    await page.keyboard.type(text, { delay: 25 }).catch(() => {});
+    return true;
+  }
+
+  async pressKeyPortalSession(portalId, key) {
+    const page = this.#openSessionPages.get(portalId);
+    if (!page) return false;
+    await page.keyboard.press(key).catch(() => {});
+    return true;
+  }
+
+  async screenshotPortalSession(portalId) {
+    const page = this.#openSessionPages.get(portalId);
     if (!page) return null;
     return page.screenshot({ type: "jpeg", quality: 60, timeout: 4000 }).catch(() => null);
   }
