@@ -6,6 +6,16 @@ function parseTry(value) {
   return Number.isFinite(number) && number >= 100 && number <= 1000000 ? number : null;
 }
 
+const AMOUNT = String.raw`\d{1,3}(?:\.\d{3})*(?:,\d{2})?|\d{3,6}(?:,\d{2})?`;
+// Bazı portallar tutarı yalnız önüne ("₺15.399,53"), bazıları yalnız
+// arkasına ("15.399,53 TL") para birimi koyuyor; ikisi de yakalanmalı,
+// aksi halde o şirketin teklifi sessizce atlanır (Quick gibi).
+const PRICE_PATTERN = new RegExp(`₺\\s*(${AMOUNT})|(${AMOUNT})\\s*(?:TL|₺)`, "gi");
+
+function priceFromMatch(match) {
+  return parseTry(match[1] || match[2]);
+}
+
 export function extractOffersFromText(text, portal) {
   const upper = String(text).toLocaleUpperCase("tr-TR");
   const offers = [];
@@ -40,7 +50,7 @@ export function extractOffersFromText(text, portal) {
     const segment = String(text).slice(start, end);
     const nameStartInSegment = position - start;
     const nameEndInSegment = aliasEnd - start;
-    const priceMatches = [...segment.matchAll(/(?:₺\s*)?(\d{1,3}(?:\.\d{3})*(?:,\d{2})?|\d{3,6}(?:,\d{2})?)\s*(?:TL|₺)/gi)];
+    const priceMatches = [...segment.matchAll(PRICE_PATTERN)];
 
     // Fiyat tablolarında değer genelde şirket adından SONRA gelir; bu yüzden
     // adın bittiği yerden itibaren ilk fiyatı tercih ediyoruz. Yalnızca adın
@@ -57,7 +67,7 @@ export function extractOffersFromText(text, portal) {
       }
     }
     if (!chosen) continue;
-    const price = parseTry(chosen[1]);
+    const price = priceFromMatch(chosen);
     if (!price) continue;
     offers.push({
       company,

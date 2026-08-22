@@ -10,7 +10,7 @@ import { FileStore, publicJob } from "./lib/store.mjs";
 import { normalizeOtp, normalizePhone, safeMessage, validateJobInput } from "./lib/validation.mjs";
 import { QueryEngine } from "./engine.mjs";
 
-const VERSION = "1.6.0";
+const VERSION = "1.7.0";
 const portalRegistry = new Map(portals.map((portal) => [portal.id, Object.freeze({ ...portal })]));
 const store = new FileStore({ jobsDir: paths.jobsDir, settingsFile: paths.settingsFile, retentionDays: config.retentionDays });
 const events = new JobEvents();
@@ -19,10 +19,13 @@ await Promise.all([store.init(), browserManager.init()]);
 let portalSettings = await store.getPortalSettings();
 let lastRuntimeError = null;
 let portalProbes = {};
+let sessionStatus = {};
+let sessionCheckRunning = false;
 
 function portalView(portal) {
   const setting = portalSettings[portal.id] || {};
   const probe = portalProbes[portal.id] || null;
+  const session = sessionStatus[portal.id] || null;
   const discoveredReady = portal.adapter === "generic" && probe?.state === "form_detected";
   const enabled = typeof setting.enabled === "boolean" ? setting.enabled : portal.defaultEnabled === true;
   return {
@@ -35,7 +38,36 @@ function portalView(portal) {
     probeState: probe?.state || null,
     probeMessage: probe?.message || "",
     probeCheckedAt: probe?.checkedAt || null,
+    sessionLoggedIn: session?.loggedIn ?? null,
+    sessionMessage: session?.message || "",
+    sessionCheckedAt: session?.checkedAt || null,
   };
+}
+
+async function checkAllSessions() {
+  if (sessionCheckRunning) return;
+  sessionCheckRunning = true;
+  try {
+    const targets = portals.filter((portal) => portal.smsPolicy === "session_once");
+    let nextIndex = 0;
+    const workers = Array.from({ length: Math.min(config.probeConcurrency, targets.length) }, async () => {
+      while (nextIndex < targets.length) {
+        const portal = targets[nextIndex];
+        nextIndex += 1;
+        try {
+          const result = await engine.checkPortalSession(portal, {
+            navigationTimeoutMs: portal.navigationTimeoutMs || Math.min(config.navigationTimeoutMs, 20000),
+          });
+          sessionStatus = { ...sessionStatus, [portal.id]: { ...result, checkedAt: new Date().toISOString() } };
+        } catch (error) {
+          sessionStatus = { ...sessionStatus, [portal.id]: { loggedIn: null, message: safeMessage(error, 200), checkedAt: new Date().toISOString() } };
+        }
+      }
+    });
+    await Promise.all(workers);
+  } finally {
+    sessionCheckRunning = false;
+  }
 }
 
 function probeSummary() {
@@ -180,6 +212,14 @@ app.post(["/api/v1/portals/reset-sessions", "/api/portals/reset-sessions"], asyn
   } catch (error) { next(error); }
 });
 
+app.post(["/api/v1/sessions/check", "/api/sessions/check"], async (req, res, next) => {
+  try {
+    if (sessionCheckRunning) return res.status(409).json({ error: "Oturum kontrolü zaten çalışıyor" });
+    await checkAllSessions();
+    res.json({ ok: true, portals: portals.map(portalView) });
+  } catch (error) { next(error); }
+});
+
 app.get(["/api/v1/jobs", "/api/jobs"], (req, res) => res.json({ jobs: store.listJobs(30).map(publicJob), queue: queue.stats }));
 app.get(["/api/v1/jobs/:id", "/api/jobs/:id"], (req, res) => {
   const job = store.getJob(req.params.id);
@@ -207,10 +247,15 @@ async function createJob(req, res, next) {
       }
     }
     const now = new Date().toISOString();
+    const SESSION_HINT_FRESH_MS = 15 * 60 * 1000;
+    const sessionHints = Object.fromEntries(selected
+      .map((portal) => [portal.id, sessionStatus[portal.id]])
+      .filter(([, status]) => status?.loggedIn === true && Date.now() - Date.parse(status.checkedAt || 0) < SESSION_HINT_FRESH_MS));
     const job = {
       id: randomUUID(), createdAt: now, updatedAt: now, startedAt: null, finishedAt: null, status: "queued",
       ...validated.value,
       portalIds: selected.map((portal) => portal.id),
+      sessionHints,
       results: [],
       portalStates: Object.fromEntries(selected.map((portal) => [portal.id, {
         portalId: portal.id, portalName: portal.name, status: "queued", message: "Sırada", updatedAt: now,
@@ -321,7 +366,11 @@ const server = app.listen(config.port, "0.0.0.0", () => {
 async function probeConfiguredPortals() {
   const targets = [...portals];
   let nextIndex = 0;
-  const workers = Array.from({ length: Math.min(config.maxConcurrency, targets.length) }, async () => {
+  // Bu, gerçek sorgu gönderimlerinden farklı, salt okunur bir bağlantı
+  // testi olduğu için, sorgu sırasındaki hız sınırı kaygısı olmadan daha
+  // yüksek paralellikle çalıştırılıp portal havuzu daha hızlı hazır hale
+  // getirilebilir.
+  const workers = Array.from({ length: Math.min(config.probeConcurrency, targets.length) }, async () => {
     while (nextIndex < targets.length) {
       const portal = targets[nextIndex];
       nextIndex += 1;

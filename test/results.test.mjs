@@ -20,6 +20,13 @@ test("komşu şirketlerin fiyatları birbirine karışmaz (Dijipol tipi tablo)",
   assert.equal(offers.find((offer) => offer.company === "AXA SİGORTA").price, 800);
 });
 
+test("yalnız önüne ₺ konan fiyatları da yakalar (sonrasında TL/₺ olmasa bile)", () => {
+  const offers = extractOffersFromText("QUICK SİGORTA en düşük fiyat ₺9.850,40 hemen satın al", portal);
+  assert.equal(offers.length, 1);
+  assert.equal(offers[0].company, "QUICK SİGORTA");
+  assert.equal(offers[0].price, 9850.40);
+});
+
 test("aynı portal fiyatını tekilleştirip en iyi teklifi özetler", () => {
   const input = [
     { company: "ALLIANZ", price: 10000, sourcePortalId: "a" },

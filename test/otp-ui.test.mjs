@@ -49,7 +49,7 @@ test("panel yenilenince aktif sorguya yeniden bağlanma kodu korunur", async () 
 });
 
 test("SMS gönderilir gönderilmez panel bekleme durumuna geçirilir", async () => {
-  const source = await readFile(new URL("../src/adapters/ihsan-adapter.mjs", import.meta.url), "utf8");
+  const source = await readFile(new URL("../src/adapters/ihsan/shared.mjs", import.meta.url), "utf8");
   const sendIndex = source.indexOf("pendingCode = requestOtp()");
   const portalInputIndex = source.indexOf("otpInput = await waitForSessionOtp", sendIndex);
   assert.ok(sendIndex > 0);

@@ -108,6 +108,16 @@ export class QueryEngine {
     }));
   }
 
+  async checkPortalSession(portal, { navigationTimeoutMs } = {}) {
+    const adapter = getAdapter(portal);
+    if (typeof adapter.checkSession !== "function") return { loggedIn: null, message: "Bu portal için oturum kavramı yok" };
+    return this.browserManager.withPortalPage(portal, (page) => adapter.checkSession({
+      page,
+      portal,
+      navigationTimeoutMs: navigationTimeoutMs || portal.navigationTimeoutMs || this.config.navigationTimeoutMs,
+    }));
+  }
+
   submitOtp(jobId, portalId, code) {
     return this.submitInput(jobId, portalId, "otp", code);
   }

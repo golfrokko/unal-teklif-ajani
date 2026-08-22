@@ -38,7 +38,7 @@ const elements = Object.fromEntries([
   "raw-data", "full-name", "identity", "birth-date", "plate", "registration", "vehicle", "year", "chassis", "engine",
   "phone", "email", "consent", "start-button", "parse-status", "portal-groups", "progress", "progress-list",
   "progress-title", "progress-subtitle", "job-status", "cancel-button", "log", "log-list", "log-count",
-  "error-log", "error-log-list", "error-log-count",
+  "error-log", "error-log-list", "error-log-count", "session-check-status",
   "results", "results-body", "result-count", "otp-dock",
   "otp-cards", "otp-count", "error-banner", "portal-count", "max-concurrency", "concurrency-stat"
 ].map((id) => [id, document.getElementById(id)]));
@@ -237,6 +237,17 @@ function formatPhone(value) {
   return digits.length === 11 ? `${digits.slice(0,4)} ${digits.slice(4,7)} ${digits.slice(7,9)} ${digits.slice(9,11)}` : value;
 }
 
+function relativeTime(isoString) {
+  const ms = Date.now() - new Date(isoString).getTime();
+  if (!Number.isFinite(ms) || ms < 0) return "";
+  const minutes = Math.floor(ms / 60000);
+  if (minutes < 1) return "az önce";
+  if (minutes < 60) return `${minutes} dk önce`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} sa önce`;
+  return `${Math.floor(hours / 24)} gün önce`;
+}
+
 function showError(message) {
   elements["error-banner"].textContent = message;
   elements["error-banner"].classList.remove("hidden");
@@ -282,7 +293,10 @@ function renderPortals({ preserveSelection = false } = {}) {
             || (portal.enabled ? ({ verified: "Canlı doğrulandı", beta: "Canlı test aşaması" }[portal.integrationStatus] || "Adaptör testi gerekli") : "Canlı test bekleniyor");
           const available = portal.available ?? portal.enabled;
           const checked = available && (previousSelection ? previousSelection.has(portal.id) : portal.enabled);
-          return `<label class="portal-check" title="${escapeHtml(portal.probeMessage || portal.smsEvidence || "")}"><input type="checkbox" value="${escapeHtml(portal.id)}" ${checked ? "checked" : ""} ${available ? "" : "disabled"} /><span></span><div><strong>${escapeHtml(portal.name)}</strong><small>${escapeHtml(readiness)}<br />${escapeHtml(smsLabels[portal.smsPolicy] || smsLabels.unknown)}</small></div></label>`;
+          const sessionBadge = portal.smsPolicy === "session_once"
+            ? `<em class="session-badge" data-state="${portal.sessionLoggedIn === true ? "on" : portal.sessionLoggedIn === false ? "off" : "unknown"}" title="${escapeHtml(portal.sessionMessage || "")}">${portal.sessionLoggedIn === true ? "● Bağlı" : portal.sessionLoggedIn === false ? "● Bağlı değil" : "○ Kontrol edilmedi"}${portal.sessionCheckedAt ? ` · ${relativeTime(portal.sessionCheckedAt)}` : ""}</em>`
+            : "";
+          return `<label class="portal-check" title="${escapeHtml(portal.probeMessage || portal.smsEvidence || "")}"><input type="checkbox" value="${escapeHtml(portal.id)}" ${checked ? "checked" : ""} ${available ? "" : "disabled"} /><span></span><div><strong>${escapeHtml(portal.name)}</strong><small>${escapeHtml(readiness)}<br />${escapeHtml(smsLabels[portal.smsPolicy] || smsLabels.unknown)}</small>${sessionBadge}</div></label>`;
         }).join("")}
       </div>
     </article>
@@ -553,6 +567,13 @@ async function boot() {
     elements["max-concurrency"].textContent = `En fazla ${portalData.maxConcurrency} eşzamanlı sorgu`;
     elements["concurrency-stat"].textContent = portalData.maxConcurrency;
     renderPortals();
+    const lastChecked = portals.map((portal) => portal.sessionCheckedAt).filter(Boolean).sort().at(-1);
+    if (lastChecked) {
+      const onCount = portals.filter((portal) => portal.sessionLoggedIn === true).length;
+      const sessionPortalCount = portals.filter((portal) => portal.smsPolicy === "session_once").length;
+      elements["session-check-status"].classList.remove("hidden");
+      elements["session-check-status"].textContent = `Son kontrol: ${new Date(lastChecked).toLocaleTimeString("tr-TR")} · ${onCount}/${sessionPortalCount} oturum açık`;
+    }
 
     const rememberedJobId = window.localStorage.getItem(ACTIVE_JOB_STORAGE_KEY);
     const jobs = Array.isArray(jobData.jobs) ? jobData.jobs : [];
@@ -636,6 +657,58 @@ document.getElementById("reset-sessions").addEventListener("click", async (event
     button.textContent = original;
   } finally {
     window.setTimeout(() => { button.disabled = false; button.textContent = original; }, 2500);
+  }
+});
+
+document.getElementById("check-sessions").addEventListener("click", async (event) => {
+  const button = event.currentTarget;
+  const original = button.textContent;
+  button.disabled = true;
+  button.textContent = "Oturumlar kontrol ediliyor…";
+  elements["session-check-status"].classList.remove("hidden");
+  elements["session-check-status"].textContent = "Kontrol ediliyor, birkaç dakika sürebilir…";
+  try {
+    const body = await fetchJson("/api/sessions/check", { method: "POST" }, 120000);
+    portals = body.portals;
+    renderPortals({ preserveSelection: true });
+    const checkedAt = new Date().toLocaleTimeString("tr-TR");
+    const onCount = portals.filter((portal) => portal.sessionLoggedIn === true).length;
+    const sessionPortalCount = portals.filter((portal) => portal.smsPolicy === "session_once").length;
+    elements["session-check-status"].textContent = `Son kontrol: ${checkedAt} · ${onCount}/${sessionPortalCount} oturum açık`;
+  } catch (error) {
+    showError(error.message);
+    elements["session-check-status"].textContent = `Kontrol başarısız: ${error.message}`;
+  } finally {
+    button.disabled = false;
+    button.textContent = original;
+  }
+});
+
+document.getElementById("ruhsat-photo").addEventListener("change", async (event) => {
+  const file = event.target.files?.[0];
+  const statusEl = document.getElementById("ruhsat-scan-status");
+  if (!file) return;
+  statusEl.classList.remove("hidden");
+  statusEl.textContent = "Görsel işleniyor…";
+  try {
+    if ("BarcodeDetector" in window) {
+      const bitmap = await createImageBitmap(file);
+      const detector = new window.BarcodeDetector({ formats: ["qr_code"] });
+      const codes = await detector.detect(bitmap);
+      if (codes.length && codes[0].rawValue) {
+        const raw = codes[0].rawValue;
+        elements["raw-data"].value = raw;
+        setParsed(parseVehicleData(raw));
+        statusEl.textContent = `QR okundu: ${raw.slice(0, 90)}${raw.length > 90 ? "…" : ""}`;
+        return;
+      }
+    }
+    statusEl.textContent = "QR kod bulunamadı. Bu ortamda fotoğraftan otomatik metin okuma (OCR) yapılandırılmadı; bilgileri elle girin.";
+  } catch (error) {
+    statusEl.textContent = `Görsel işlenemedi: ${error.message}`;
+    logTechError("Ruhsat görseli işleme", error);
+  } finally {
+    event.target.value = "";
   }
 });
 

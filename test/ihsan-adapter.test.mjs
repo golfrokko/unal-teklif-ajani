@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { chooseBestOption } from "../src/adapters/ihsan-adapter.mjs";
+import { chooseBestOption } from "../src/adapters/ihsan/shared.mjs";
 
 test("İhsan seçimlerinde tam model yılını seçer", () => {
   const option = chooseBestOption([

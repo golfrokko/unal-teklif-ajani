@@ -1,10 +1,11 @@
-import { extractOffersFromText } from "../lib/results.mjs";
-import { RESEND_SENTINEL } from "../lib/validation.mjs";
+import { extractOffersFromText } from "../../lib/results.mjs";
+import { RESEND_SENTINEL } from "../../lib/validation.mjs";
 import {
   acceptRequiredConsents,
   clickNamedButton,
   clickSubmit,
   detectCaptcha,
+  ensurePlateAvailable,
   fillBirthDate,
   fillFirst,
   fillNameAndEmail,
@@ -15,7 +16,7 @@ import {
   pageState,
   resolveTarget,
   visibleText,
-} from "./form-adapter.mjs";
+} from "../form-adapter.mjs";
 
 const BLOCK_PATTERN = /(SORRY, YOU HAVE BEEN BLOCKED|YOU ARE UNABLE TO ACCESS|ACCESS DENIED|ERİŞİM ENGELLENDİ|REQUEST BLOCKED)/i;
 const VALIDATION_PATTERN = /(LÜTFEN GEÇERLİ|BU ALAN ZORUNLUDUR|ALANI ZORUNLUDUR|DEVAM ETMEK İÇİN BU ALANI|EKSİK BİLGİ)/i;
@@ -147,6 +148,7 @@ async function fillIhsanFields(target, job, { includeDynamic = false, page = nul
   await humanPause();
   filled.birthDate = await fillBirthDate(target, vehicle.birthDate);
   await humanPause();
+  await ensurePlateAvailable(target);
   filled.plate = await fillFirst(target, vehicle.plate,
     ['input[placeholder*="34 ABC" i]', 'input[name*="plate" i]', 'input[name*="plaka" i]'], ["Plaka"]);
   await humanPause();
@@ -197,7 +199,9 @@ async function hasIdentityOrPlateField(target) {
 async function escapeNonQueryScreens(target, page) {
   for (let attempt = 0; attempt < 3; attempt += 1) {
     if (await hasIdentityOrPlateField(target)) return true;
-    const dismissed = await clickNamedButton(target, [/Şimdi Değil/i, /Vazgeç/i, /Daha Sonra/i, /Atla/i, /Kapat/i])
+    const selectedCategory = await clickNamedButton(target, [/^Zorunlu Trafik Sigortası$/i, /^Trafik Sigortası$/i], { maxTextLength: 32 });
+    const dismissed = selectedCategory
+      || await clickNamedButton(target, [/Şimdi Değil/i, /Vazgeç/i, /Daha Sonra/i, /Atla/i, /Kapat/i])
       || await clickNamedButton(target, [/Trafik Sigortası Teklif/i, /Trafik Teklifi/i, /Hemen Teklif Al/i, /Teklif Al/i, /Sorgula/i]);
     if (!dismissed) return false;
     await page.waitForTimeout(900);
@@ -290,7 +294,11 @@ async function completeSessionLogin({ page, target, job, portal, requestOtp, set
   let pendingCode = null;
   let phoneFilled = false;
 
-  const loginVisible = !otpInput && await namedControlVisible(target, [/^Giriş Yap$/i]);
+  // "Oturumları Sorgula" ile yakın zamanda oturumun açık olduğu doğrulandıysa
+  // "Giriş Yap" düğmesi için ayrı bir DOM sorgusu atlanır; SMS metnine göre
+  // yapılan denetim (aşağıda) yine de gerçek bir giriş gerekiyorsa bunu yakalar.
+  const sessionHint = job.sessionHints?.[portal.id];
+  const loginVisible = !otpInput && sessionHint?.loggedIn !== true && await namedControlVisible(target, [/^Giriş Yap$/i]);
   const smsStepLikely = loginVisible || (!otpInput && SESSION_SMS_PATTERN.test(await visibleText(loginTarget)));
   if (!otpInput && !smsStepLikely) {
     // Ne SMS/giriş kutusu ne "Giriş Yap" görünüyor: portal önceki oturumdan zaten
@@ -577,6 +585,23 @@ export class IhsanPortalAdapter {
       ...profile,
       ...(sessionProfile ? { sessionProfile } : {}),
     };
+  }
+
+  // Gerçek bir sorgu göndermeden yalnız oturumun açık olup olmadığını
+  // kontrol eder. "Oturumları Sorgula" paneli ve gerçek sorgu başlamadan
+  // önceki hızlı ön kontrol için kullanılır.
+  async checkSession({ page, portal, navigationTimeoutMs }) {
+    if (portal.smsPolicy !== "session_once") return { loggedIn: null, message: "Bu portal için oturum kavramı yok" };
+    await page.goto(portal.url, { waitUntil: "domcontentloaded", timeout: navigationTimeoutMs });
+    await page.waitForTimeout(700);
+    const text = await visibleText(page);
+    if (BLOCK_PATTERN.test(text)) return { loggedIn: null, message: "Güvenlik duvarı erişimi engelledi" };
+    if (await detectCaptcha(page, text)) return { loggedIn: null, message: "Güvenlik doğrulaması gerekiyor" };
+    const target = await resolveTarget(page, portal);
+    const loginVisible = await namedControlVisible(target, [/^Giriş Yap$/i]);
+    return loginVisible
+      ? { loggedIn: false, message: "Giriş yapılmamış; sorguda SMS istenecek" }
+      : { loggedIn: true, message: "Oturum açık görünüyor" };
   }
 
   async run(context) {

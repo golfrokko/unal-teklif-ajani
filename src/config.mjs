@@ -17,6 +17,7 @@ export const config = Object.freeze({
   defaultPhone: String(process.env.DEFAULT_PHONE || ""),
   defaultEmail: String(process.env.DEFAULT_EMAIL || "").trim(),
   maxConcurrency: boundedNumber(process.env.MAX_CONCURRENCY, 3, 1, 5),
+  probeConcurrency: boundedNumber(process.env.PROBE_CONCURRENCY, 8, 1, 15),
   maxActiveJobs: boundedNumber(process.env.MAX_ACTIVE_JOBS, 1, 1, 2),
   navigationTimeoutMs: boundedNumber(process.env.NAVIGATION_TIMEOUT_MS, 45000, 10000, 120000),
   resultTimeoutMs: boundedNumber(process.env.RESULT_TIMEOUT_MS, 180000, 30000, 300000),

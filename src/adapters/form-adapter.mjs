@@ -5,14 +5,35 @@ function escapeRegex(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-export async function fillHumanLike(input, value) {
+function valuesEffectivelyMatch(actual, expected) {
+  const a = String(actual || "");
+  const e = String(expected || "");
+  if (a.replace(/\s+/g, "") === e.replace(/\s+/g, "")) return true;
+  // Maskeli alanlar (telefon, TC vb.) ayraç/parantez ekleyebilir; rakamları
+  // sırayla karşılaştırmak biçimlendirmeden bağımsız doğru sonucu verir.
+  const digitsA = a.replace(/\D/g, "");
+  const digitsE = e.replace(/\D/g, "");
+  return digitsE.length > 0 && digitsA === digitsE;
+}
+
+async function typeIntoInput(input, value, delay) {
   await input.click({ timeout: 3000, clickCount: 3 }).catch(() => {});
+  await input.press("Control+A").catch(() => {});
+  await input.press("Backspace").catch(() => {});
   await input.fill("", { timeout: 2000 }).catch(() => {});
-  await input.pressSequentially(String(value), { timeout: 8000, delay: 28 }).catch(async () => {
-    await input.fill(String(value), { timeout: 3000 }).catch(() => {});
-  });
-  const actual = await input.inputValue({ timeout: 1000 }).catch(() => "");
-  if (actual.replace(/\s+/g, "") !== String(value).replace(/\s+/g, "")) {
+  await input.pressSequentially(String(value), { timeout: 8000, delay }).catch(() => {});
+}
+
+export async function fillHumanLike(input, value) {
+  await typeIntoInput(input, value, 28);
+  let actual = await input.inputValue({ timeout: 1000 }).catch(() => "");
+  if (!valuesEffectivelyMatch(actual, value)) {
+    // Bazı maskeleme kütüphaneleri hızlı yazımı yakalayamıyor; daha yavaş
+    // ikinci bir deneme yapılır.
+    await typeIntoInput(input, value, 60);
+    actual = await input.inputValue({ timeout: 1000 }).catch(() => "");
+  }
+  if (!valuesEffectivelyMatch(actual, value)) {
     await input.fill(String(value), { timeout: 3000 }).catch(() => {});
   }
 }
@@ -94,6 +115,30 @@ function convertDateFormat(ddmmyyyy, targetFormat) {
   if (targetFormat === "mm/dd/yyyy") return `${pad(mm)}/${pad(dd)}/${yyyy}`;
   if (targetFormat === "yyyy-mm-dd") return `${yyyy}-${pad(mm)}-${pad(dd)}`;
   return `${pad(dd)}.${pad(mm)}.${yyyy}`;
+}
+
+// Bazı sitelerde "Plakam Var / Plakam Yok" sekmesi veya "Plakam yok"
+// anahtarı bulunuyor; biz her zaman gerçek plaka bilgisiyle sorgu yaptığımız
+// için "plakam yok" modunun açık kalması formu yanlış akışa sokuyor.
+export async function ensurePlateAvailable(target) {
+  const plakamVarButton = target.getByRole("button", { name: /^Plakam Var$/i }).first();
+  if (await plakamVarButton.isVisible({ timeout: 400 }).catch(() => false)) {
+    const alreadySelected = await plakamVarButton.evaluate((element) => (
+      element.classList.contains("active") || element.getAttribute("aria-selected") === "true" || element.getAttribute("aria-pressed") === "true"
+    )).catch(() => false);
+    if (!alreadySelected) await plakamVarButton.click({ timeout: 3000 }).catch(() => {});
+    return true;
+  }
+  const noPlateToggle = target.locator('label:has-text("Plakam yok"), label:has-text("Plakam Yok")').first();
+  if (await noPlateToggle.isVisible({ timeout: 400 }).catch(() => false)) {
+    const input = noPlateToggle.locator('input[type="checkbox"], input[type="radio"], input[role="switch"]').first();
+    const isChecked = await input.isChecked({ timeout: 400 }).catch(() => false);
+    if (isChecked) {
+      await input.click({ force: true, timeout: 3000 }).catch(async () => { await noPlateToggle.click({ force: true, timeout: 3000 }).catch(() => {}); });
+    }
+    return true;
+  }
+  return false;
 }
 
 export async function fillBirthDate(target, birthDate) {
@@ -218,6 +263,7 @@ export async function fillQuoteForm(target, job) {
   await humanPause();
   filled.birthDate = await fillBirthDate(target, vehicle.birthDate);
   await humanPause();
+  await ensurePlateAvailable(target);
   filled.plate = await fillFirst(target, vehicle.plate,
     ['input[name*="plate" i]', 'input[name*="plaka" i]', 'input[placeholder*="plaka" i]'], ["Plaka"]);
   await humanPause();
@@ -273,12 +319,27 @@ export async function clickSubmit(target) {
   return false;
 }
 
-export async function clickNamedButton(target, names) {
+async function isShortEnoughControl(control, maxTextLength) {
+  const text = await control.innerText({ timeout: 500 }).catch(() => "");
+  return text.trim().length <= maxTextLength;
+}
+
+// Bazı sitelerde "Teklif Al" gibi kısa CTA metinleri, sayfa içindeki uzun
+// pazarlama/blog cümlelerinin (örn. "... Tekliflerini Gör, Karşılaştır ve
+// Avantajlı Fiyatlarla Hemen Al.") içinde de geçiyor. Regex ile eşleşen ama
+// metni çok uzun olan bağlantılar gerçek giriş düğmesi olamaz; bunları atlayıp
+// asıl kısa CTA'yı arıyoruz.
+export async function clickNamedButton(target, names, { maxTextLength = 60 } = {}) {
   for (const name of names) {
     for (const role of ["button", "link"]) {
       try {
-        const control = target.getByRole(role, { name }).first();
-        if (await control.isVisible({ timeout: 500 }) && await control.isEnabled({ timeout: 500 })) {
+        const controls = target.getByRole(role, { name });
+        const count = Math.min(await controls.count().catch(() => 0), 8);
+        for (let index = 0; index < count; index += 1) {
+          const control = controls.nth(index);
+          if (!await control.isVisible({ timeout: 500 }).catch(() => false)) continue;
+          if (!await control.isEnabled({ timeout: 500 }).catch(() => false)) continue;
+          if (!await isShortEnoughControl(control, maxTextLength)) continue;
           await control.click({ timeout: 5000 });
           return true;
         }
@@ -397,9 +458,13 @@ async function quoteFormProfile(target) {
 
 async function openQuoteFlow(target, page) {
   let profile = await quoteFormProfile(target);
-  for (let attempt = 0; attempt < 3; attempt += 1) {
+  for (let attempt = 0; attempt < 4; attempt += 1) {
     if ((profile.hasIdentity || profile.hasPlate || profile.hasRegistration) && profile.hasSubmit) return profile;
-    const dismissed = await clickNamedButton(target, [/Şimdi Değil/i, /Vazgeç/i, /Daha Sonra/i, /Atla/i, /Kapat/i]);
+    // "Bir sigorta seç" gibi ürün seçim menülerinde önce en spesifik/kısa
+    // eşleşmeyi (tam "Trafik Sigortası" satırı) dene; bu, uzun tanıtım
+    // metinlerindeki "... Teklif Al" gibi genel ifadelerden önce gelmeli.
+    const selectedCategory = await clickNamedButton(target, [/^Zorunlu Trafik Sigortası$/i, /^Trafik Sigortası$/i], { maxTextLength: 32 });
+    const dismissed = selectedCategory || await clickNamedButton(target, [/Şimdi Değil/i, /Vazgeç/i, /Daha Sonra/i, /Atla/i, /Kapat/i]);
     const opened = dismissed || await clickNamedButton(target, [
       /Trafik Sigortası Teklif/i,
       /Trafik Teklifi/i,

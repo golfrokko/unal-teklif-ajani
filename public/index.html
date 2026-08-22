@@ -58,6 +58,11 @@
           <label>Şasi no <small>İsteğe bağlı</small><input id="chassis" /></label>
           <label>Motor no <small>İsteğe bağlı</small><input id="engine" /></label>
         </div>
+        <div class="ruhsat-scan">
+          <label class="ruhsat-scan-button" for="ruhsat-photo"><span>📷</span> Ruhsat fotoğrafı çek / QR okut</label>
+          <input id="ruhsat-photo" type="file" accept="image/*" capture="environment" class="hidden" />
+          <p id="ruhsat-scan-status" class="ruhsat-scan-status hidden"></p>
+        </div>
       </article>
 
       <aside class="card settings-card">
@@ -88,7 +93,8 @@
     </section>
 
     <section class="card portal-section" id="portals">
-      <div class="section-head"><div><span class="eyebrow orange">PORTAL HAVUZU</span><h3>Teklif kaynakları</h3><p>Yalnız canlı adaptörü hazır portallar seçilebilir; diğerleri hazırlandıkça açılır.</p></div><div class="portal-actions"><button id="select-all" type="button">Tüm hazırları seç</button><button id="select-ihsan" type="button">Yalnız İhsan</button><button id="select-none" type="button">Temizle</button><button id="reset-sessions" type="button" title="Kayıtlı portal oturumlarını sil; sonraki sorguda yeniden giriş yapılır">Oturumları sıfırla</button></div></div>
+      <div class="section-head"><div><span class="eyebrow orange">PORTAL HAVUZU</span><h3>Teklif kaynakları</h3><p>Yalnız canlı adaptörü hazır portallar seçilebilir; diğerleri hazırlandıkça açılır.</p></div><div class="portal-actions"><button id="select-all" type="button">Tüm hazırları seç</button><button id="check-sessions" type="button" title="İhsan altyapılı sitelerde oturumun açık olup olmadığını kontrol eder">Oturumları Sorgula</button><button id="select-ihsan" type="button">Yalnız İhsan</button><button id="select-none" type="button">Temizle</button><button id="reset-sessions" type="button" title="Kayıtlı portal oturumlarını sil; sonraki sorguda yeniden giriş yapılır">Oturumları sıfırla</button></div></div>
+      <p id="session-check-status" class="session-check-status hidden"></p>
       <div id="portal-groups" class="portal-groups"></div>
     </section>
 
