@@ -28,6 +28,11 @@ export const config = Object.freeze({
   ihsanSmsCooldownMs: boundedNumber(process.env.IHSAN_SMS_COOLDOWN_MS, 65000, 0, 180000),
   retryCount: boundedNumber(process.env.PORTAL_RETRY_COUNT, 1, 0, 2),
   retentionDays: boundedNumber(process.env.JOB_RETENTION_DAYS, 30, 1, 365),
+  // Bazı portallarda masaüstü yerleşimi 1440px viewport'a sığmayıp yazılar
+  // üst üste biniyor ve öğeler tıklanamaz hale geliyor. Sayfayı tarayıcı
+  // yakınlaştırmasıyla (CSS zoom) küçültmek, medya sorgusu genişliğini
+  // değiştirmeden içeriğin ekrana sığmasını sağlıyor.
+  pageZoom: boundedNumber(process.env.PAGE_ZOOM, 0.7, 0.4, 1),
   headless: process.env.HEADLESS !== "false",
   allowedOrigins: [
     "https://unal-teklif-avcisi.golfrokko.chatgpt.site",

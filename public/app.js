@@ -321,7 +321,12 @@ function renderPortals({ preserveSelection = false } = {}) {
           const screenshotLink = screenshotKind
             ? `<a class="portal-screenshot-link" href="/api/portals/${encodeURIComponent(portal.id)}/screenshot/${screenshotKind}?t=${Date.now()}" target="_blank" rel="noopener" title="Hata anındaki ekran görüntüsü">📷 Ekran görüntüsü</a>`
             : "";
-          return `<label class="portal-check" title="${escapeHtml(portal.probeMessage || portal.smsEvidence || "")}"><input type="checkbox" value="${escapeHtml(portal.id)}" ${checked ? "checked" : ""} ${available ? "" : "disabled"} /><span></span><div><strong>${escapeHtml(portal.name)}</strong><small>${escapeHtml(readiness)}<br />${escapeHtml(smsLabels[portal.smsPolicy] || smsLabels.unknown)}</small>${sessionBadge}${screenshotLink}</div></label>`;
+          // Not: hazır görünmeyen portallar da SEÇİLEBİLİR bırakılıyor (yalnız
+          // varsayılan olarak işaretli gelmiyorlar). Bir portal çoğu zaman tam
+          // da CAPTCHA/giriş elle tamamlanmadığı için "hazır" görünmüyor;
+          // kutucuğu kilitlemek onu Oturum Aç'ta ve elle sorguda hedeflenemez
+          // yapıyordu.
+          return `<label class="portal-check" title="${escapeHtml(portal.probeMessage || portal.smsEvidence || "")}"><input type="checkbox" value="${escapeHtml(portal.id)}" ${checked ? "checked" : ""} /><span></span><div><strong>${escapeHtml(portal.name)}</strong><small>${escapeHtml(readiness)}<br />${escapeHtml(smsLabels[portal.smsPolicy] || smsLabels.unknown)}</small>${sessionBadge}${screenshotLink}</div></label>`;
         }).join("")}
       </div>
     </article>
@@ -829,7 +834,7 @@ elements["portal-groups"].addEventListener("change", (event) => {
 });
 document.getElementById("select-all").addEventListener("click", () => {
   portalSelectionTouched = true;
-  document.querySelectorAll('.portal-check input:not(:disabled)').forEach((input) => { input.checked = true; });
+  document.querySelectorAll('.portal-check input').forEach((input) => { input.checked = true; });
 });
 document.getElementById("select-none").addEventListener("click", () => {
   portalSelectionTouched = true;
@@ -837,7 +842,7 @@ document.getElementById("select-none").addEventListener("click", () => {
 });
 document.getElementById("select-ihsan").addEventListener("click", () => {
   portalSelectionTouched = true;
-  document.querySelectorAll('.portal-check input').forEach((input) => { input.checked = !input.disabled && portals.find((portal) => portal.id === input.value)?.group === "İhsan altyapısı"; });
+  document.querySelectorAll('.portal-check input').forEach((input) => { input.checked = portals.find((portal) => portal.id === input.value)?.group === "İhsan altyapısı"; });
 });
 document.getElementById("reset-sessions").addEventListener("click", async (event) => {
   const button = event.currentTarget;

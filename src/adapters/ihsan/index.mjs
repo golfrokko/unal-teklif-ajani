@@ -4,7 +4,6 @@ import sigortamobil from "./sigortamobil.mjs";
 import tasalti from "./tasalti.mjs";
 import sert from "./sert.mjs";
 import nepratik from "./nepratik.mjs";
-import iskenderun from "./iskenderun.mjs";
 import sigortammilli from "./sigortammilli.mjs";
 import { IhsanPortalAdapter } from "./shared.mjs";
 
@@ -15,7 +14,6 @@ export const ihsanAdaptersById = {
   tasalti,
   sert,
   nepratik,
-  iskenderun,
   sigortammilli,
 };
 

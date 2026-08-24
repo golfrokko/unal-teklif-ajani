@@ -12,6 +12,24 @@ export function normalizeEmail(value) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email) ? email : "";
 }
 
+// Sigortalı bir tüzel kişiyse (ör. "... GIDA SANAYİ VE TİCARET LİMİTED
+// ŞİRKETİ") portalların çoğu "Bireysel/Kurumsal" sekmesi veya "TC Kimlik No /
+// Vergi Kimlik No" seçimi istiyor; yanlış seçim sorguyu baştan geçersiz
+// kılıyor. Ad/soyad metnindeki bu tür ibareler kurumsal işareti sayılır.
+// Not: Türkçe büyük harf dönüşümü ve İ/ı katlaması için trUpper mantığı
+// (toLocaleUpperCase("tr-TR")) kullanılıyor; desenler bu yüzden büyük harfli.
+const CORPORATE_NAME_PATTERN = /\b(GIDA|SANAY[İI]|T[İI]CARET|L[İI]M[İI]TED|Ş[İI]RKET[İI]?|ANON[İI]M|LTD|A\.?Ş|ŞT[İI]|HOLD[İI]NG|[İI]NŞAAT|OTOMOT[İI]V|NAKL[İI]YAT|TUR[İI]ZM|PAZARLAMA|MÜHEND[İI]SL[İI]K|KOOPERAT[İI]F|VAKF[İI]?|DERNEĞ[İI]?)\b/;
+
+export function isCorporateName(fullName) {
+  return CORPORATE_NAME_PATTERN.test(String(fullName || "").toLocaleUpperCase("tr-TR"));
+}
+
+// Kurumsal sorgu kararı: ad/soyad kurumsal ibare içeriyorsa VEYA kimlik
+// numarası 10 haneliyse (VKN 10, TC 11 hane) kurumsal kabul edilir.
+export function isCorporateJob(vehicle = {}) {
+  return isCorporateName(vehicle.fullName) || String(vehicle.identity || "").replace(/\D/g, "").length === 10;
+}
+
 export function normalizeVehicle(input = {}) {
   return {
     fullName: String(input.fullName || "").replace(/\s+/g, " ").trim().slice(0, 80),

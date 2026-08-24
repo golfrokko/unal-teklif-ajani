@@ -1,5 +1,5 @@
-import { extractOffersFromText } from "../lib/results.mjs";
-import { RESEND_SENTINEL } from "../lib/validation.mjs";
+import { extractOffersFromText, mergeOffers } from "../lib/results.mjs";
+import { isCorporateJob, RESEND_SENTINEL } from "../lib/validation.mjs";
 
 function escapeRegex(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -75,24 +75,39 @@ export async function fillHumanLike(input, value) {
   }
 }
 
+// Bir etiket metni ("TC Kimlik No" gibi) hem bir RADYO/onay kutusunu hem de
+// asıl metin kutusunu tanımlıyor olabilir (ör. "TC Kimlik No / Vergi Kimlik
+// No" seçimi + altındaki numara alanı). Metin yazmak istediğimiz yerde
+// yanlışlıkla radyoya denk gelirsek fillHumanLike onu TIKLAR ve formun
+// kimlik tipi seçimini bozar (kurumsal sorgu bireysele düşer). Bu yüzden
+// metin girilebilir olmayan kontroller atlanır.
+async function isTextEnterable(locator) {
+  return locator.evaluate((element) => {
+    const tag = element.tagName?.toLowerCase();
+    if (tag === "textarea") return true;
+    if (tag !== "input") return false;
+    const type = (element.getAttribute("type") || "text").toLowerCase();
+    return !["radio", "checkbox", "button", "submit", "reset", "image", "file", "range", "color"].includes(type);
+  }).catch(() => false);
+}
+
+async function fillIfTextField(locator, value) {
+  if (!await locator.isVisible({ timeout: 400 }).catch(() => false)) return false;
+  if (!await isTextEnterable(locator)) return false;
+  await fillHumanLike(locator, value);
+  return true;
+}
+
 export async function fillFirst(target, value, selectors, labelTerms) {
   if (!value) return false;
   for (const selector of selectors) {
     try {
-      const input = target.locator(selector).first();
-      if (await input.isVisible({ timeout: 400 })) {
-        await fillHumanLike(input, value);
-        return true;
-      }
+      if (await fillIfTextField(target.locator(selector).first(), value)) return true;
     } catch {}
   }
   for (const term of labelTerms) {
     try {
-      const input = target.getByLabel(new RegExp(escapeRegex(term), "i")).first();
-      if (await input.isVisible({ timeout: 400 })) {
-        await fillHumanLike(input, value);
-        return true;
-      }
+      if (await fillIfTextField(target.getByLabel(new RegExp(escapeRegex(term), "i")).first(), value)) return true;
     } catch {}
   }
   for (const term of labelTerms) {
@@ -100,15 +115,11 @@ export async function fillFirst(target, value, selectors, labelTerms) {
       const label = target.locator("label").filter({ hasText: new RegExp(escapeRegex(term), "i") }).first();
       if (!(await label.isVisible({ timeout: 400 }))) continue;
       const inside = label.locator("input").first();
-      if (await inside.count()) {
-        await fillHumanLike(inside, value);
-        return true;
-      }
+      if (await inside.count() && await fillIfTextField(inside, value)) return true;
       const forId = await label.getAttribute("for");
       if (forId) {
         const linked = target.locator(`[id="${forId.replace(/(["\\])/g, "\\$1")}"]`).first();
-        await fillHumanLike(linked, value);
-        return true;
+        if (await fillIfTextField(linked, value)) return true;
       }
     } catch {}
   }
@@ -396,7 +407,31 @@ const PHONE_LABELS = ["GSM", "Cep Telefonu", "Telefon"];
 // Sigortayeri: plaka, TC). portal.fieldOrder bu adımların BİR KISMINI
 // (veya tamamını) öne alabilir; listelenmeyen adımlar varsayılan
 // sıralarında sona eklenir, hiçbir alan atlanmaz.
-const DEFAULT_FIELD_ORDER = ["identity", "birthDate", "plate", "registration", "phone", "chassis", "engine", "matbuVehicle", "registrationDate", "usageType", "occupation", "seatCount", "fuelType", "hasarsizlik", "nameEmail"];
+const DEFAULT_FIELD_ORDER = ["corporateMode", "identity", "birthDate", "plate", "registration", "phone", "chassis", "engine", "matbuVehicle", "registrationDate", "usageType", "occupation", "seatCount", "fuelType", "hasarsizlik", "nameEmail"];
+
+// Tüzel kişi sorgularında portallar "Bireysel/Kurumsal" sekmesi ya da
+// "TC Kimlik No / Vergi Kimlik No" seçimi istiyor. Yanlış (varsayılan
+// bireysel) seçimle devam etmek sorguyu baştan geçersiz kılıyordu.
+const CORPORATE_TAB_NAMES = ["Kurumsal", "Tüzel Kişi", "Şirket"].map((phrase) => new RegExp(`^${turkishFoldPattern(phrase)}`, "i"));
+const CORPORATE_RADIO_LABELS = ["Vergi Kimlik No", "Vergi No", "VKN", "Kurumsal", "Tüzel"];
+
+export async function selectCorporateMode(target) {
+  let applied = false;
+  // 1) "Kurumsal" sekmesi/düğmesi (ör. Sigorta7).
+  if (await clickNamedButton(target, CORPORATE_TAB_NAMES, { maxTextLength: 24 })) applied = true;
+  // 2) "Vergi Kimlik No" radyo düğmesi (ör. Bitikla, Sigortayeri).
+  for (const label of CORPORATE_RADIO_LABELS) {
+    const radio = target.getByLabel(turkishFoldRegex(label)).first();
+    if (!await radio.isVisible({ timeout: 250 }).catch(() => false)) continue;
+    const type = await radio.evaluate((element) => element.getAttribute("type")).catch(() => null);
+    if (type !== "radio" && type !== "checkbox") continue;
+    if (await radio.isChecked({ timeout: 250 }).catch(() => false)) return true;
+    await radio.check({ force: true, timeout: 3000 }).catch(() => {});
+    applied = true;
+    break;
+  }
+  return applied;
+}
 
 export async function fillQuoteForm(target, job, portal) {
   const vehicle = job.vehicle;
@@ -404,6 +439,13 @@ export async function fillQuoteForm(target, job, portal) {
   const filled = {};
 
   const steps = {
+    // Kimlik alanından ÖNCE çalışır: kurumsal seçim çoğu sitede formu
+    // yeniden çizdiğinden (TC alanı -> Vergi No alanı) sonra doldurulmalı.
+    corporateMode: async () => {
+      if (!isCorporateJob(vehicle)) return;
+      filled.corporateMode = await selectCorporateMode(target);
+      if (filled.corporateMode) await humanPause();
+    },
     identity: async () => {
       filled.identity = await fillFirst(target, vehicle.identity,
         ['input[name*="identity" i]', 'input[name*="kimlik" i]', 'input[name*="tc" i]', 'input[placeholder*="TC" i]', 'input[placeholder*="kimlik" i]'],
@@ -792,6 +834,13 @@ const NO_OFFER_PATTERN = foldAnyPattern(["TEKLİF BULUNAMADI", "UYGUN TEKLİF YO
 const SMS_LANGUAGE_PATTERN = foldAnyPattern(["SMS", "TEK KULLANIMLIK", "DOĞRULAMA KODU", "ONAY KODU", "CEP TELEFONUNUZA"]);
 const RESULT_PROGRESS_PATTERN = foldAnyPattern(["TEKLİF SONUÇLARI", "TEKLİFLER SORGULANIYOR", "SORGULAMA DURUMU", "FİYATLAR HAZIRLANIYOR"]);
 
+// Kullanıcı gözlemi: portalların tüm sigorta şirketlerini listelemesi ~30
+// saniye sürüyor; teklifler tek seferde değil birer birer düşüyor. Sonucu
+// kapatmadan önce hem bu toplama penceresinin dolması hem de yeni teklif
+// gelmeyi bırakması (durağanlık) bekleniyor.
+export const OFFER_COLLECTION_WINDOW_MS = 30000;
+export const OFFER_SETTLE_MS = 8000;
+
 // Bazı karşılaştırma sitelerinde başlangıçta tek (öne çıkan/en ucuz) teklif
 // gösterilip diğerleri bu tür bir düğmenin arkasında saklı kalıyor.
 export const REVEAL_ALL_OFFERS_BUTTON_NAMES = [
@@ -826,6 +875,7 @@ export async function waitForOutcome({ page, target, job, portal, resultTimeoutM
   const startedAt = Date.now();
   let lastOffers = [];
   let lastOfferChangeAt = 0;
+  let firstOfferAt = 0;
   let lastStage = "Portal formu gönderildi; cevap bekleniyor";
   const track = (status, message, extra) => {
     lastStage = message;
@@ -887,21 +937,24 @@ export async function waitForOutcome({ page, target, job, portal, resultTimeoutM
     // yoksa no-op (sayfada yoksa hızlıca vazgeçer).
     await clickNamedButton(target, REVEAL_ALL_OFFERS_BUTTON_NAMES).catch(() => {});
 
-    const offers = extractOffersFromText(text, portal);
-    if (offers.length) {
-      const fingerprint = JSON.stringify(offers.map((offer) => [offer.company, offer.price]));
-      const previousFingerprint = JSON.stringify(lastOffers.map((offer) => [offer.company, offer.price]));
-      if (fingerprint !== previousFingerprint) {
-        lastOffers = offers;
-        lastOfferChangeAt = Date.now();
+    const visibleOffers = extractOffersFromText(text, portal);
+    if (visibleOffers.length) {
+      // Teklifler birer birer yüklendiği ve ara render'larda ekranda geçici
+      // olarak azalabildiği için o anki görüntü değil, sorgu boyunca görülen
+      // TÜM teklifler biriktiriliyor (bkz. mergeOffers).
+      const merged = mergeOffers(lastOffers, visibleOffers);
+      if (merged.length !== lastOffers.length) lastOfferChangeAt = Date.now();
+      lastOffers = merged;
+      if (!firstOfferAt) firstOfferAt = Date.now();
+      // Kullanıcı gözlemi: portalların tüm şirketleri listelemesi ~30 saniye
+      // sürebiliyor; ilk teklif görüldükten sonra bu süre dolmadan ve üstüne
+      // yeni teklif gelmeyi bırakmadan sonuç kapatılmıyor.
+      const collectedLongEnough = Date.now() - firstOfferAt >= OFFER_COLLECTION_WINDOW_MS;
+      const settled = Date.now() - lastOfferChangeAt >= OFFER_SETTLE_MS;
+      if (collectedLongEnough && settled) {
+        return { status: "completed", message: `${lastOffers.length} şirket teklifi alındı`, offers: lastOffers };
       }
-      // Not: kullanıcı gözlemi (Dijipol) — bazı karşılaştırma sitelerinde
-      // şirket teklifleri tek seferde değil, birer birer (bazen >8sn arayla)
-      // yükleniyor. Eski 8sn'lik "değişmedi -> bitti" varsayımı bu durumda
-      // erken davranıp yalnız ilk gelen teklifi döndürüyordu. Daha sabırlı
-      // (20sn) bir durağanlık penceresi, toplam resultTimeoutMs bütçesi
-      // içinde kalarak eksik teklif riskini azaltıyor.
-      if (Date.now() - lastOfferChangeAt >= 20000) return { status: "completed", message: `${offers.length} şirket teklifi alındı`, offers };
+      await track("collecting", `${lastOffers.length} teklif alındı; diğer şirketler bekleniyor`);
     }
     if (RESULT_PROGRESS_PATTERN.test(text)) {
       await track("collecting", "Sigorta şirketlerinden fiyat bekleniyor");

@@ -2,8 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { portals } from "../src/portals.mjs";
 
-test("25 portalın SMS politikası tanımlıdır", () => {
-  assert.equal(portals.length, 25);
+test("23 portalın SMS politikası tanımlıdır", () => {
+  assert.equal(portals.length, 23);
   const validPolicies = new Set(["none", "per_query", "session_once", "unknown"]);
   for (const portal of portals) {
     assert.ok(validPolicies.has(portal.smsPolicy), `${portal.id} SMS politikası geçersiz`);
@@ -22,10 +22,10 @@ test("yönlendirme ve bozuk istemci portalları çalışıyor gibi sunulmaz", ()
   assert.equal(portals.find((portal) => portal.id === "policekes").diagnosticState, "client_error");
 });
 
-test("sekiz İhsan portalı canlı beta havuzunda ve varsayılan açık", () => {
+test("yedi İhsan portalı canlı beta havuzunda ve varsayılan açık", () => {
   const ihsan = portals.filter((portal) => ["ihsan", "ihsan-frame"].includes(portal.adapter));
-  assert.equal(ihsan.length, 8);
-  assert.equal(ihsan.filter((portal) => portal.defaultEnabled).length, 8);
+  assert.equal(ihsan.length, 7);
+  assert.equal(ihsan.filter((portal) => portal.defaultEnabled).length, 7);
   assert.ok(ihsan.every((portal) => portal.integrationStatus === "beta"));
 });
 

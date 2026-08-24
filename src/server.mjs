@@ -14,7 +14,7 @@ const VERSION = "1.13.0";
 const portalRegistry = new Map(portals.map((portal) => [portal.id, Object.freeze({ ...portal })]));
 const store = new FileStore({ jobsDir: paths.jobsDir, settingsFile: paths.settingsFile, retentionDays: config.retentionDays });
 const events = new JobEvents();
-const browserManager = new BrowserManager({ sessionsDir: paths.sessionsDir, headless: config.headless });
+const browserManager = new BrowserManager({ sessionsDir: paths.sessionsDir, headless: config.headless, pageZoom: config.pageZoom });
 await Promise.all([store.init(), browserManager.init()]);
 let portalSettings = await store.getPortalSettings();
 let lastRuntimeError = null;
@@ -335,10 +335,13 @@ async function createJob(req, res, next) {
     if (validated.error) return res.status(400).json({ error: validated.error });
     const hasExplicitSelection = Array.isArray(req.body?.portalIds);
     const requested = hasExplicitSelection ? new Set(req.body.portalIds) : new Set(portals.filter((portal) => portalView(portal).enabled).map((portal) => portal.id));
-    const selected = portals.filter((portal) => {
-      const view = portalView(portal);
-      return requested.has(portal.id) && (view.enabled || (hasExplicitSelection && view.available));
-    });
+    // Kullanıcı panelden açıkça bir portal seçtiyse "hazır/enabled" şartı
+    // aranmaz: bir portal çoğu zaman tam da elle giriş/CAPTCHA tamamlanmadığı
+    // için hazır görünmüyor, ama kullanıcı Oturum Aç ile hazırlayıp yine de
+    // sorgulamak isteyebiliyor. Seçim yoksa eski davranış (yalnız enabled).
+    const selected = portals.filter((portal) => (
+      requested.has(portal.id) && (hasExplicitSelection || portalView(portal).enabled)
+    ));
     if (!selected.length) return res.status(400).json({ error: "Etkin en az bir portal seçilmelidir" });
     const emailPortal = selected.find((portal) => portal.requiredFields?.includes("email"));
     if (emailPortal && !validated.value.email) return res.status(400).json({ error: `${emailPortal.name} için geçerli teklif e-postası zorunludur` });

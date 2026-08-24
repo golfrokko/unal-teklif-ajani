@@ -1,5 +1,5 @@
-import { extractOffersFromText } from "../../lib/results.mjs";
-import { RESEND_SENTINEL } from "../../lib/validation.mjs";
+import { extractOffersFromText, mergeOffers } from "../../lib/results.mjs";
+import { isCorporateJob, RESEND_SENTINEL } from "../../lib/validation.mjs";
 import {
   acceptRequiredConsents,
   captureSharedFacts,
@@ -16,9 +16,12 @@ import {
   fillSplitRegistrationIfPresent,
   findOtpInput,
   humanPause,
+  OFFER_COLLECTION_WINDOW_MS,
+  OFFER_SETTLE_MS,
   pageState,
   resolveTarget,
   REVEAL_ALL_OFFERS_BUTTON_NAMES,
+  selectCorporateMode,
   turkishFoldPattern,
   turkishFoldRegex,
   visibleText,
@@ -172,6 +175,12 @@ function vehicleCandidates(vehicleText) {
 async function fillIhsanFields(target, job, { includeDynamic = false, page = null } = {}) {
   const vehicle = job.vehicle;
   const filled = {};
+  // Tüzel kişi sorgusuysa kimlik alanından ÖNCE "Vergi Kimlik No"/"Kurumsal"
+  // seçilmeli; aksi halde 10 haneli VKN, TC alanına yazılıp reddediliyor.
+  if (isCorporateJob(vehicle)) {
+    filled.corporateMode = await selectCorporateMode(target);
+    if (filled.corporateMode) await humanPause();
+  }
   filled.identity = await fillFirst(target, vehicle.identity,
     ['input[placeholder*="kimlik numaranızı" i]', 'input[name*="identity" i]', 'input[name*="kimlik" i]', 'input[name*="tc" i]'],
     ["Kimlik Numarası", "TC Kimlik No", "TC/Vergi", "TC Kimlik Numarası", "Vergi Kimlik No"]);
@@ -505,6 +514,7 @@ async function waitForIhsanOutcome({ page, target, job, portal, resultTimeoutMs,
   let dynamicAttempted = false;
   let lastOffers = [];
   let lastOfferChangeAt = 0;
+  let firstOfferAt = 0;
   let sessionChallengeCompleted = false;
   let lastStage = "Portal formu gönderildi; cevap bekleniyor";
   const track = (status, message, extra) => {
@@ -550,17 +560,21 @@ async function waitForIhsanOutcome({ page, target, job, portal, resultTimeoutMs,
 
     await clickNamedButton(target, REVEAL_ALL_OFFERS_BUTTON_NAMES).catch(() => {});
 
-    const offers = extractOffersFromText(text, portal);
-    if (offers.length) {
-      const fingerprint = JSON.stringify(offers.map((offer) => [offer.company, offer.price]));
-      if (fingerprint !== JSON.stringify(lastOffers.map((offer) => [offer.company, offer.price]))) {
-        lastOffers = offers;
-        lastOfferChangeAt = Date.now();
+    // form-adapter.mjs'deki toplama mantığıyla birebir aynı: o anki görüntü
+    // değil, sorgu boyunca görülen tüm teklifler biriktirilir; toplama
+    // penceresi dolmadan ve yeni teklif gelmeyi bırakmadan kapatılmaz.
+    const visibleOffers = extractOffersFromText(text, portal);
+    if (visibleOffers.length) {
+      const merged = mergeOffers(lastOffers, visibleOffers);
+      if (merged.length !== lastOffers.length) lastOfferChangeAt = Date.now();
+      lastOffers = merged;
+      if (!firstOfferAt) firstOfferAt = Date.now();
+      const collectedLongEnough = Date.now() - firstOfferAt >= OFFER_COLLECTION_WINDOW_MS;
+      const settled = Date.now() - lastOfferChangeAt >= OFFER_SETTLE_MS;
+      if (collectedLongEnough && settled) {
+        return { status: "completed", message: `${lastOffers.length} şirket teklifi doğrulandı`, offers: lastOffers };
       }
-      // form-adapter.mjs'deki aynı düzeltmeyle tutarlı: teklifler birer
-      // birer geldiğinde eski kısa (5sn) durağanlık penceresi eksik teklif
-      // listesiyle erken "bitti" diyordu; 20sn'ye çıkarıldı.
-      if (Date.now() - lastOfferChangeAt >= 20000) return { status: "completed", message: `${offers.length} şirket teklifi doğrulandı`, offers };
+      await track("collecting", `${lastOffers.length} teklif alındı; diğer şirketler bekleniyor`);
     }
 
     const hasDynamicStep = DYNAMIC_STEP_PATTERN.test(text);

@@ -5,7 +5,6 @@ import supersigortam from "./supersigortam.mjs";
 import bisigorta from "./bisigorta.mjs";
 import ibksigorta from "./ibksigorta.mjs";
 import emaxsigorta from "./emaxsigorta.mjs";
-import pakasigorta from "./pakasigorta.mjs";
 import koalay from "./koalay.mjs";
 import enuygun from "./enuygun.mjs";
 import sigortambir from "./sigortambir.mjs";
@@ -32,7 +31,6 @@ export const genericAdaptersById = {
   bisigorta,
   ibksigorta,
   emaxsigorta,
-  pakasigorta,
   koalay,
   enuygun,
   sigortambir,

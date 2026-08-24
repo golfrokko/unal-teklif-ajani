@@ -7,9 +7,10 @@ export class BrowserManager {
   #browserPromise = null;
   #activeContexts = new Set();
 
-  constructor({ sessionsDir, headless = true }) {
+  constructor({ sessionsDir, headless = true, pageZoom = 1 }) {
     this.sessionsDir = sessionsDir;
     this.headless = headless;
+    this.pageZoom = pageZoom;
     this.lastError = null;
   }
 
@@ -78,6 +79,7 @@ export class BrowserManager {
       timezoneId: "Europe/Istanbul",
       userAgent: "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0 Safari/537.36",
     });
+    await this.#applyPageZoom(context);
     this.#activeContexts.add(context);
     const page = await context.newPage();
     try {
@@ -98,6 +100,22 @@ export class BrowserManager {
     this.#activeContexts.clear();
     await this.#browser?.close().catch(() => {});
     this.#browser = null;
+  }
+
+  // Sayfayı CSS zoom ile küçültür. Medya sorgusu genişliğini (window.innerWidth)
+  // değiştirmediğinden site masaüstü yerleşiminde kalır, yalnız her şey
+  // küçülüp viewport'a sığar; böylece dar ekranda üst üste binen yazılar
+  // ayrışır. Playwright tıklama koordinatları zoom'u hesaba kattığından
+  // otomasyon davranışı bozulmaz (gerçek tarayıcıda doğrulandı).
+  async #applyPageZoom(context) {
+    if (!(this.pageZoom > 0) || this.pageZoom === 1) return;
+    await context.addInitScript((zoom) => {
+      const apply = () => {
+        if (document.documentElement) document.documentElement.style.zoom = String(zoom);
+      };
+      apply();
+      document.addEventListener("DOMContentLoaded", apply);
+    }, this.pageZoom).catch(() => {});
   }
 
   async #readSession(file) {

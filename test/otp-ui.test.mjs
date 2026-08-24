@@ -59,6 +59,9 @@ test("SMS gönderilir gönderilmez panel bekleme durumuna geçirilir", async () 
 test("canlı keşif portalları otomatik sorgulanmaz, kullanıcı seçimi bekler", async () => {
   const source = await readFile(new URL("../src/server.mjs", import.meta.url), "utf8");
   assert.match(source, /available: enabled \|\| discoveredReady/);
-  assert.match(source, /hasExplicitSelection && view\.available/);
+  // Açık seçim yoksa yalnız "enabled" portallar sorgulanır; kullanıcı elle
+  // seçtiyse hazır görünmeyen portal da (ör. önce Oturum Aç ile hazırlanan)
+  // sorguya dahil edilebilir.
+  assert.match(source, /hasExplicitSelection \|\| portalView\(portal\)\.enabled/);
   assert.doesNotMatch(source, /enabled:.*discoveredReady/);
 });

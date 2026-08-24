@@ -139,6 +139,23 @@ export function deduplicateOffers(results = []) {
   return [...unique.values()];
 }
 
+// Teklif sayfaları şirketleri birer birer yüklüyor; bazı sitelerde ara
+// yeniden çizimlerde (filtre, sekme, kısmi render) ekranda o an DAHA AZ
+// teklif görünebiliyor. Her turda görüneni "son durum" saymak, toplanan
+// listeyi küçültüp eksik sonuca yol açıyordu. Bunun yerine sorgu boyunca
+// görülen tüm teklifler biriktirilir; aynı şirket+portal için en düşük
+// fiyat korunur.
+export function mergeOffers(accumulated = [], incoming = []) {
+  const merged = new Map();
+  for (const offer of [...accumulated, ...incoming]) {
+    if (!offer?.company || !Number.isFinite(offer?.price)) continue;
+    const key = `${offer.company}:${offer.sourcePortalId ?? ""}`;
+    const current = merged.get(key);
+    if (!current || offer.price < current.price) merged.set(key, offer);
+  }
+  return [...merged.values()];
+}
+
 export function summarizeResults(results = []) {
   const grouped = new Map();
   for (const result of deduplicateOffers(results)) {
