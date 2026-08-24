@@ -6,6 +6,7 @@ import {
   clickNamedButton,
   clickSubmit,
   detectCaptcha,
+  dismissNoPopup,
   ensurePlateAvailable,
   fillBirthDate,
   fillFirst,
@@ -305,23 +306,6 @@ async function sessionDialogTargetAnywhere(page, target) {
   return inTarget;
 }
 
-// Sorgu ilerlerken tanımadığımız bir Evet/Hayır onay penceresi çıkabiliyor
-// (ör. "Ek bir ürün eklemek ister misiniz?"). Bunu ne diye soracağını
-// bilmediğimizden güvenli varsayılan olan "Hayır" otomatik tıklanır; akış
-// kullanıcı müdahalesi beklemeden devam eder.
-async function dismissUnknownYesNoPopup(target) {
-  const dialog = await sessionDialogTarget(target);
-  if (dialog === target) return false;
-  // Not: gerçek düğme metni tam "Hayır"/"Evet" olmayabilir (ör. "Hayır,
-  // teşekkürler", "Evet, istiyorum"); bu yüzden BAŞLANGIÇ eşleşmesi
-  // kullanılıyor (^Hayır, ^Evet), tam eşleşme değil.
-  const noButton = dialog.getByRole("button", { name: /^Hayır/i }).first();
-  const hasYes = await namedControlVisible(dialog, [/^Evet/i]);
-  if (!hasYes || !await noButton.isVisible({ timeout: 300 }).catch(() => false)) return false;
-  await noButton.click({ timeout: 3000 }).catch(() => {});
-  return true;
-}
-
 async function sessionTargetText(loginTarget, fallbackTarget) {
   if (loginTarget !== fallbackTarget) {
     const text = await loginTarget.innerText({ timeout: 3000 }).catch(() => "");
@@ -523,7 +507,7 @@ async function waitForIhsanOutcome({ page, target, job, portal, resultTimeoutMs,
   };
   while (Date.now() - startedAt < resultTimeoutMs) {
     if (isCancelled()) return { status: "cancelled", message: "Sorgu iptal edildi" };
-    if (await dismissUnknownYesNoPopup(target)) {
+    if (await dismissNoPopup(target)) {
       await page.waitForTimeout(500);
       continue;
     }

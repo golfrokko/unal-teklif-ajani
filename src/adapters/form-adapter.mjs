@@ -81,19 +81,40 @@ export async function fillHumanLike(input, value) {
 // yanlışlıkla radyoya denk gelirsek fillHumanLike onu TIKLAR ve formun
 // kimlik tipi seçimini bozar (kurumsal sorgu bireysele düşer). Bu yüzden
 // metin girilebilir olmayan kontroller atlanır.
-async function isTextEnterable(locator) {
+async function controlKind(locator) {
   return locator.evaluate((element) => {
     const tag = element.tagName?.toLowerCase();
-    if (tag === "textarea") return true;
-    if (tag !== "input") return false;
+    if (tag === "select") return "select";
+    if (tag === "textarea") return "text";
+    if (tag !== "input") return "other";
     const type = (element.getAttribute("type") || "text").toLowerCase();
-    return !["radio", "checkbox", "button", "submit", "reset", "image", "file", "range", "color"].includes(type);
-  }).catch(() => false);
+    return ["radio", "checkbox", "button", "submit", "reset", "image", "file", "range", "color"].includes(type) ? "other" : "text";
+  }).catch(() => "other");
+}
+
+// Açılır listelerde metin yazmak yerine seçenek seçilir; etiket birebir
+// tutmayabileceğinden (ör. "Diğer" / "DİĞER" / "Diger") Türkçe büyük harfe
+// normalize edilip önce tam, sonra kısmi eşleşme aranır.
+async function selectClosestOption(locator, value) {
+  const options = await locator.locator("option").evaluateAll((nodes) => nodes.map((node) => ({
+    value: node.value,
+    label: (node.textContent || "").trim(),
+    disabled: node.disabled,
+  }))).catch(() => []);
+  const wanted = trUpper(value).trim();
+  const usable = options.filter((option) => !option.disabled && String(option.value || "").trim());
+  const exact = usable.find((option) => trUpper(option.label).trim() === wanted);
+  const partial = usable.find((option) => trUpper(option.label).includes(wanted));
+  const chosen = exact || partial;
+  if (!chosen) return false;
+  return locator.selectOption(chosen.value, { timeout: 4000 }).then(() => true).catch(() => false);
 }
 
 async function fillIfTextField(locator, value) {
   if (!await locator.isVisible({ timeout: 400 }).catch(() => false)) return false;
-  if (!await isTextEnterable(locator)) return false;
+  const kind = await controlKind(locator);
+  if (kind === "select") return selectClosestOption(locator, value);
+  if (kind !== "text") return false;
   await fillHumanLike(locator, value);
   return true;
 }
@@ -218,16 +239,29 @@ export async function ensurePlateAvailable(target) {
     if (!alreadySelected) await plakamVarButton.click({ timeout: 3000 }).catch(() => {});
     return true;
   }
-  const noPlateToggle = target.locator('label:has-text("Plakam yok"), label:has-text("Plakam Yok"), label:has-text("Plakam henüz çıkmadı")').first();
-  if (await noPlateToggle.isVisible({ timeout: 400 }).catch(() => false)) {
-    const input = noPlateToggle.locator('input[type="checkbox"], input[type="radio"], input[role="switch"]').first();
-    const isChecked = await input.isChecked({ timeout: 400 }).catch(() => false);
-    if (isChecked) {
-      await input.click({ force: true, timeout: 3000 }).catch(async () => { await noPlateToggle.click({ force: true, timeout: 3000 }).catch(() => {}); });
+  // "Plakam yok" her sitede <label> içinde değil; Sigortayeri'nde metin bir
+  // satırda, anahtar (switch) onun yanında ayrı bir öğe. Bu yüzden metni
+  // içeren HERHANGİ bir kapsayıcı taranıp içindeki/komşusundaki anahtar
+  // bulunuyor. Anahtar açıksa kapatılır — açık kalırsa site plakayı hiç
+  // sormayıp sorguyu yanlış akışa sokuyor.
+  const noPlateRow = target.locator(
+    'label, [role="switch"], .form-check, .switch, .toggle, li, tr, div'
+  ).filter({ hasText: turkishFoldRegex("Plakam yok") }).last();
+  if (!await noPlateRow.isVisible({ timeout: 400 }).catch(() => false)) return false;
+
+  const toggle = noPlateRow.locator('input[type="checkbox"], input[type="radio"], [role="switch"]').first();
+  if (await toggle.count().catch(() => 0)) {
+    const isOn = await toggle.isChecked({ timeout: 400 }).catch(() => null)
+      ?? (await toggle.getAttribute("aria-checked").catch(() => null)) === "true";
+    if (isOn) {
+      await toggle.click({ force: true, timeout: 3000 })
+        .catch(async () => { await noPlateRow.click({ force: true, timeout: 3000 }).catch(() => {}); });
     }
     return true;
   }
-  return false;
+  const rowIsSwitch = await noPlateRow.getAttribute("aria-checked").catch(() => null);
+  if (rowIsSwitch === "true") await noPlateRow.click({ force: true, timeout: 3000 }).catch(() => {});
+  return true;
 }
 
 export async function fillBirthDate(target, birthDate) {
@@ -304,16 +338,44 @@ async function locateVisibleField(target, selectors, labelTerms) {
 // durumda tek bir alana tüm değeri ("GT377874") yazmak yanlış olur; ikisi
 // ayrı ayrı doldurulmalı. Yalnızca gerçekten iki ayrı alan görülüyorsa
 // devreye girer, aksi halde tek-alan mantığına bırakılır.
+// Seri alanı bulunduğu halde "no" alanı etiketten tanınamazsa, DOM sırasında
+// serinin hemen ardından gelen boş metin kutusu kullanılır. Bu olmadan
+// (kullanıcı gözlemi: Koalay, Bisigorta) tüm ruhsat değeri tek alana yazılıp
+// alanın maxlength'i tarafından kırpılıyor ("FV343973" -> "FV") ve belge no
+// hiç doldurulmadan kalıyordu.
+async function nextVisibleTextInputAfter(target, referenceField) {
+  const inputs = target.locator('input:not([type="hidden"]):not([type="checkbox"]):not([type="radio"]):not([type="submit"]):not([type="button"])');
+  const count = Math.min(await inputs.count().catch(() => 0), 60);
+  const reference = await referenceField.elementHandle().catch(() => null);
+  if (!reference) return null;
+  let seenReference = false;
+  for (let index = 0; index < count; index += 1) {
+    const candidate = inputs.nth(index);
+    const handle = await candidate.elementHandle().catch(() => null);
+    if (!handle) continue;
+    if (!seenReference) {
+      seenReference = await reference.evaluate((node, other) => node === other, handle).catch(() => false);
+      continue;
+    }
+    if (!await candidate.isVisible({ timeout: 250 }).catch(() => false)) continue;
+    if (await candidate.inputValue({ timeout: 250 }).catch(() => "")) continue;
+    return candidate;
+  }
+  return null;
+}
+
 export async function fillSplitRegistrationIfPresent(target, registration) {
   const { seri, no } = splitRegistrationParts(registration);
   if (seri === registration || no === registration || !seri || !no) return false;
   const seriField = await locateVisibleField(target,
     ['input[name*="belgeseri" i]', 'input[name*="ruhsatseri" i]', 'input[placeholder*="belge seri" i]', 'input[placeholder*="ruhsat seri" i]'],
-    ["Belge Seri", "Ruhsat Seri"]);
+    ["Belge Seri", "Ruhsat Belge Seri", "Ruhsat Seri", "Belge Seri No", "Seri No"]);
+  if (!seriField) return false;
   const noField = await locateVisibleField(target,
-    ['input[name*="belgeno" i]', 'input[name*="belge_no" i]', 'input[placeholder*="belge no" i]'],
-    ["Belge No", "Ruhsat Belge No", "Tescil No"]);
-  if (!seriField || !noField) return false;
+    ['input[name*="belgeno" i]', 'input[name*="belge_no" i]', 'input[name*="ruhsatno" i]', 'input[placeholder*="belge no" i]'],
+    ["Belge No", "Ruhsat Belge No", "Belge Numarası", "Tescil No", "Ruhsat No"])
+    || await nextVisibleTextInputAfter(target, seriField);
+  if (!noField) return false;
   await fillHumanLike(seriField, seri);
   await fillHumanLike(noField, no);
   return true;
@@ -407,7 +469,7 @@ const PHONE_LABELS = ["GSM", "Cep Telefonu", "Telefon"];
 // Sigortayeri: plaka, TC). portal.fieldOrder bu adımların BİR KISMINI
 // (veya tamamını) öne alabilir; listelenmeyen adımlar varsayılan
 // sıralarında sona eklenir, hiçbir alan atlanmaz.
-const DEFAULT_FIELD_ORDER = ["corporateMode", "identity", "birthDate", "plate", "registration", "phone", "chassis", "engine", "matbuVehicle", "registrationDate", "usageType", "occupation", "seatCount", "fuelType", "hasarsizlik", "nameEmail"];
+const DEFAULT_FIELD_ORDER = ["corporateMode", "identity", "birthDate", "plate", "registration", "phone", "chassis", "engine", "matbuVehicle", "registrationDate", "usageType", "occupation", "title", "seatCount", "fuelType", "hasarsizlik", "nameEmail"];
 
 // Tüzel kişi sorgularında portallar "Bireysel/Kurumsal" sekmesi ya da
 // "TC Kimlik No / Vergi Kimlik No" seçimi istiyor. Yanlış (varsayılan
@@ -480,10 +542,19 @@ export async function fillQuoteForm(target, job, portal) {
     // hiç verisi olmayan bir çoktan seçmeli soruluyor (ör. Dijipol). Elimizde
     // gerçek bir meslek bilgisi olmadığından güvenli/genel "Diğer"
     // seçeneğini deniyoruz; alan yoksa no-op.
+    // Meslek elimizde olmayan bir bilgi; açılır listede de serbest metin
+    // alanında da güvenli/genel "Diğer" kullanılır (ör. Sigortaladım).
     occupation: async () => {
       filled.occupation = await fillFirst(target, "Diğer",
-        ['select[name*="meslek" i]', 'select[name*="occupation" i]'],
+        ['select[name*="meslek" i]', 'select[name*="occupation" i]', 'input[name*="meslek" i]', 'input[name*="occupation" i]'],
         ["Meslek", "Mesleğiniz", "Meslek Bilgisi"]);
+    },
+    // "Ünvan" / "Şirket Ünvanı" alanı istendiğinde sigortalının tam adı
+    // doğrudan yapıştırılır (tüzel kişilerde ünvanın kendisidir).
+    title: async () => {
+      filled.title = await fillFirst(target, vehicle.fullName,
+        ['input[name*="unvan" i]', 'input[name*="title" i]', 'input[placeholder*="ünvan" i]', 'input[placeholder*="unvan" i]'],
+        ["Ünvan", "Unvan", "Şirket Ünvanı", "Firma Ünvanı", "Ticaret Ünvanı"]);
     },
     usageType: async () => {
       filled.usageType = await fillFirst(target, vehicle.usageType,
@@ -805,6 +876,42 @@ export async function dismissLeadCaptureModal(target) {
   return true;
 }
 
+// Sorgu ilerlerken tanımadığımız bir onay penceresi çıkabiliyor (ör. Bitikla
+// "Biyometrik Girişi Aktifleştirmek ister misiniz?" — Evet/Sonra/Hayır).
+// Kullanıcı talebi: böyle bir pencerede "Hayır" varsa doğrudan o seçilsin.
+// Güvenli varsayılan zaten "Hayır"; akış kullanıcı müdahalesi beklemeden
+// devam eder.
+const NO_BUTTON_PATTERN = new RegExp(`^${turkishFoldPattern("Hayır")}`, "i");
+
+// İSTİSNA: akışın kendisinde bilerek "Evet" dediğimiz sorular (ör. Sigortambir
+// "Ruhsat seri/belge numaranızı biliyor musunuz?") otomatik reddedilmemeli;
+// aksi halde adaptör kendi doldurma adımını kapatmış olur.
+const DELIBERATE_YES_QUESTION_PATTERN = new RegExp(
+  `(${["RUHSAT", "BELGE SERİ", "BELGE NO", "SERİ NO"].map(turkishFoldPattern).join("|")})`,
+  "i",
+);
+
+async function visibleDialog(target) {
+  const dialogs = target.locator('[role="dialog"], .modal.show, dialog[open], .offcanvas.show, .swal2-popup');
+  const count = Math.min(await dialogs.count().catch(() => 0), 20);
+  for (let index = count - 1; index >= 0; index -= 1) {
+    const dialog = dialogs.nth(index);
+    if (await dialog.isVisible({ timeout: 250 }).catch(() => false)) return dialog;
+  }
+  return null;
+}
+
+export async function dismissNoPopup(target) {
+  const dialog = await visibleDialog(target);
+  if (!dialog) return false;
+  const text = await dialog.innerText({ timeout: 500 }).catch(() => "");
+  if (DELIBERATE_YES_QUESTION_PATTERN.test(text)) return false;
+  const noButton = dialog.getByRole("button", { name: NO_BUTTON_PATTERN }).first();
+  if (!await noButton.isVisible({ timeout: 300 }).catch(() => false)) return false;
+  await noButton.click({ timeout: 3000 }).catch(() => {});
+  return true;
+}
+
 // Bazı portallar (İhsan altyapısı dahil) EGM sorgusu sırasında ekranda
 // "Hasarsızlık Kademesi" bilgisini gösteriyor. Bu bilgi Sigorta Kurdu gibi
 // başka bir sitenin kendi formunda AYRICA soruluyor olabilir; burada
@@ -884,6 +991,11 @@ export async function waitForOutcome({ page, target, job, portal, resultTimeoutM
   while (Date.now() - startedAt < resultTimeoutMs) {
     if (isCancelled()) return { status: "cancelled", message: "Sorgu iptal edildi" };
     if (await dismissLeadCaptureModal(target)) {
+      await page.waitForTimeout(400);
+      continue;
+    }
+    // Beklenmeyen onay penceresinde "Hayır" varsa doğrudan seçilir.
+    if (await dismissNoPopup(target)) {
       await page.waitForTimeout(400);
       continue;
     }
