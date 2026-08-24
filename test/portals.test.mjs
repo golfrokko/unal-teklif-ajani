@@ -2,8 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { portals } from "../src/portals.mjs";
 
-test("23 portalın SMS politikası tanımlıdır", () => {
-  assert.equal(portals.length, 23);
+test("20 portalın SMS politikası tanımlıdır", () => {
+  assert.equal(portals.length, 20);
   const validPolicies = new Set(["none", "per_query", "session_once", "unknown"]);
   for (const portal of portals) {
     assert.ok(validPolicies.has(portal.smsPolicy), `${portal.id} SMS politikası geçersiz`);
@@ -17,12 +17,15 @@ test("doğrulanmış SMS politikaları korunur", () => {
   assert.equal(portals.find((portal) => portal.id === "enuygun").smsPolicy, "per_query");
 });
 
-test("PoliçeKes, Sigorta.la ve Emax güncel trafik URL'lerini kullanır", () => {
-  assert.equal(portals.find((portal) => portal.id === "policekes").url, "https://www.policekes.com/oto/trafik-sigortasi-satin-al?yenileme=0");
-  assert.equal(portals.find((portal) => portal.id === "sigortala").url, "https://sigorta.la/oto/trafik-sigortasi-satin-al?yenileme=0");
-  assert.equal(portals.find((portal) => portal.id === "emaxsigorta").url, "https://www.emaxsigorta.com.tr/teklif-al/trafik");
-  assert.equal(portals.find((portal) => portal.id === "ibksigorta").imageCaptcha, true);
-  assert.equal(portals.find((portal) => portal.id === "emaxsigorta").imageCaptcha, true);
+test("PoliçeKes ve Sigorta.la güncel URL'leri kullanır; kaldırılan portallar listede yoktur", () => {
+  assert.equal(portals.find((portal) => portal.id === "policekes").url, "https://www.policekes.com/oto/trafik-sigortasi-satin-al");
+  assert.equal(portals.find((portal) => portal.id === "sigortala").url, "https://sigorta.la/oto/trafik-sigortasi-satin-al");
+  for (const id of ["emaxsigorta", "ibksigorta", "sigortakurdu"]) assert.equal(portals.some((portal) => portal.id === id), false);
+});
+
+test("SigortaBin ve Sigorta7 devre dışıdır", () => {
+  assert.equal(portals.find((portal) => portal.id === "sigortabin").deactivated, true);
+  assert.equal(portals.find((portal) => portal.id === "sigorta7").deactivated, true);
 });
 
 test("yedi İhsan portalı canlı beta havuzunda ve varsayılan açık", () => {

@@ -6,6 +6,7 @@ import {
   detectCaptcha,
   dismissNoPopup,
   fillOtpCode,
+  fillFirst,
   fillSplitRegistrationIfPresent,
   fillVisibleInputsByOrder,
   findOtpInput,
@@ -17,6 +18,7 @@ import {
   waitForOutcome,
 } from "../form-adapter.mjs";
 import { RESEND_SENTINEL } from "../../lib/validation.mjs";
+import { personalFormJob } from "./flow-tools.mjs";
 
 // Sigortambir (sigortambir) — kullanıcının adım adım tarif ettiği akış:
 //  1) Canlı formun ilk üç alanı sırayla TC, plaka, telefon; "Devam Et".
@@ -52,7 +54,8 @@ export class SigortambirAdapter extends FormPortalAdapter {
     await dismissNoPopup(target);
     await setState("filling", "TC, plaka ve telefon dolduruluyor");
     const phone10 = job.phone.replace(/^0/, "");
-    const [identityFilled] = await fillVisibleInputsByOrder(target, [job.vehicle.identity, job.vehicle.plate, phone10]);
+    const effectiveJob = personalFormJob(job);
+    const [identityFilled] = await fillVisibleInputsByOrder(target, [effectiveJob.vehicle.identity, job.vehicle.plate, phone10]);
     if (!identityFilled) return { status: "mapping_required", message: "Sigortambir'in ilk canlı veri alanları bulunamadı" };
     await humanPause();
     if (!await clickNamedButton(target, [turkishFoldRegex("Devam Et")]) && !await clickSubmit(target)) {
@@ -83,11 +86,15 @@ export class SigortambirAdapter extends FormPortalAdapter {
       await page.waitForTimeout(1500);
     }
 
-    // 3) Meslek sayfası ("Diğer" seçili gelir) -> Devam Et
-    await setState("filling", "Meslek ekranı geçiliyor");
+    // 3) Meslek sayfasında varsayıma güvenmeden açıkça "Diğer" seçilir.
+    await setState("filling", "Meslek olarak Diğer seçiliyor");
     const professionTarget = await resolveTarget(page, portal);
     await dismissNoPopup(professionTarget);
-    await clickNamedButton(professionTarget, [turkishFoldRegex("Devam Et")]).catch(() => {});
+    await fillFirst(professionTarget, "Diğer",
+      ['select[name*="meslek" i]', 'select[name*="occupation" i]'], ["Meslek", "Mesleğiniz"]);
+    if (!await clickNamedButton(professionTarget, [turkishFoldRegex("Devam Et")])) {
+      return { status: "mapping_required", message: "Meslek ekranında Devam Et düğmesi bulunamadı" };
+    }
     await page.waitForTimeout(1200);
     if (isCancelled()) return cancelled();
 
@@ -113,13 +120,18 @@ export class SigortambirAdapter extends FormPortalAdapter {
     }
     if (isCancelled()) return cancelled();
 
-    // 5) EGM sorgusu tamamlanınca bir kez daha "Devam Et"; sonrasını ortak
-    // bekleme döngüsü (teklif toplama) devralır.
+    // 5) EGM sorgusu tamamlanınca Devam Et, ardından çıkan Teklif Al.
     await setState("collecting", "EGM sorgusu bekleniyor");
     const egmTarget = await resolveTarget(page, portal);
     await this.#waitFor(page, async () => (
       await clickNamedButton(egmTarget, [turkishFoldRegex("Devam Et")]) ? true : null
     ), 40000);
+
+    await page.waitForTimeout(900);
+    const quoteTarget = await resolveTarget(page, portal);
+    if (!await clickNamedButton(quoteTarget, [turkishFoldRegex("Teklif Al")]) && !await clickSubmit(quoteTarget)) {
+      return { status: "mapping_required", message: "EGM kontrolünden sonra Teklif Al düğmesi bulunamadı" };
+    }
 
     await setState("submitted", "Teklifler bekleniyor");
     const outcomeTarget = await resolveTarget(page, portal);

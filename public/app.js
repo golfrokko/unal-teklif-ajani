@@ -1,5 +1,5 @@
 const sampleData = `Ad Soyad: Ahmet Yılmaz
-T.C. / VKN: 12345678901
+T.C. / VKN: 00000000000
 Doğum Tarihi: 12.04.1988
 Plaka: 78 SR 283
 Ruhsat Seri No: AB123456
@@ -7,7 +7,7 @@ Tescil Tarihi: 15.03.2008
 Araç: HYUNDAI ACCENT ERA 1.4
 Model Yılı: 2008
 Kullanım Tarzı: Hususi
-E-posta: ahmet.yilmaz@example.com`;
+E-posta: ornek@example.invalid`;
 
 const statusNames = {
   queued: "Sırada",
@@ -329,7 +329,7 @@ function renderPortals({ preserveSelection = false } = {}) {
           // da CAPTCHA/giriş elle tamamlanmadığı için "hazır" görünmüyor;
           // kutucuğu kilitlemek onu Oturum Aç'ta ve elle sorguda hedeflenemez
           // yapıyordu.
-          return `<label class="portal-check" title="${escapeHtml(portal.probeMessage || portal.smsEvidence || "")}"><input type="checkbox" value="${escapeHtml(portal.id)}" ${checked ? "checked" : ""} /><span></span><div><strong>${escapeHtml(portal.name)}</strong><small>${escapeHtml(readiness)}<br />${escapeHtml(smsLabels[portal.smsPolicy] || smsLabels.unknown)}</small>${sessionBadge}${screenshotLink}</div></label>`;
+          return `<label class="portal-check" title="${escapeHtml(portal.probeMessage || portal.smsEvidence || "")}"><input type="checkbox" value="${escapeHtml(portal.id)}" ${checked ? "checked" : ""} ${portal.deactivated ? "disabled" : ""} /><span></span><div><strong>${escapeHtml(portal.name)}</strong><small>${portal.deactivated ? "Geçici olarak devre dışı" : escapeHtml(readiness)}<br />${escapeHtml(smsLabels[portal.smsPolicy] || smsLabels.unknown)}</small>${sessionBadge}${screenshotLink}</div></label>`;
         }).join("")}
       </div>
     </article>
@@ -362,9 +362,11 @@ function renderProgress(job) {
     const otpState = otpSubmissionState.get(state.portalId);
     const waitingForOtp = state.status === "waiting_otp";
     const waitingForInput = state.status === "waiting_input";
-    const waitingForApproval = state.status === "waiting_approval";
-    const waitingForCaptcha = state.status === "waiting_captcha";
-    const waitingForStep = state.status === "awaiting_continue";
+    // Canlı ekran ve elle aşama ilerletme geçici olarak kapalıdır. SMS ve
+    // açıkça istenen veri alanları görünmeye devam eder.
+    const waitingForApproval = false;
+    const waitingForCaptcha = false;
+    const waitingForStep = false;
     const inputId = waitingForOtp ? "otp" : escapeHtml(state.inputId || "");
     const inputLabel = waitingForOtp ? "SMS doğrulaması" : escapeHtml(state.inputLabel || "Ek bilgi");
     const inputCopy = waitingForOtp ? "Telefona gelen kodu aşağıya yazın. Kod yalnız bu firmaya gönderilir." : "Portal bu bilgiyi istiyor; aşağıya yazıp gönderin.";
@@ -434,9 +436,9 @@ function renderProgress(job) {
 
 function renderOtp(job) {
   const waiting = Object.values(job.portalStates || {}).filter((state) => state.status === "waiting_otp" || state.status === "waiting_input");
-  const waitingApproval = Object.values(job.portalStates || {}).filter((state) => state.status === "waiting_approval");
-  const waitingCaptcha = Object.values(job.portalStates || {}).filter((state) => state.status === "waiting_captcha");
-  const waitingStep = Object.values(job.portalStates || {}).filter((state) => state.status === "awaiting_continue");
+  const waitingApproval = [];
+  const waitingCaptcha = [];
+  const waitingStep = [];
   elements["otp-dock"].classList.add("hidden");
   elements["otp-count"].textContent = `${waiting.length} portal panelden bilgi bekliyor`;
   elements["otp-cards"].innerHTML = "";

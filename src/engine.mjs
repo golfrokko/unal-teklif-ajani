@@ -7,12 +7,7 @@ import { RESEND_SENTINEL, safeMessage } from "./lib/validation.mjs";
 
 const SUCCESS_PORTAL_STATES = new Set(["completed", "no_offer", "skipped_sms"]);
 const FAILURE_PORTAL_STATES = new Set(["mapping_required", "input_required", "access_blocked", "auth_required", "manual_required", "rate_limited", "timeout", "error", "interrupted"]);
-// Kullanıcı talebi: her aşamada canlı ekran gösterilip "Devam Et" onayı
-// beklensin. Adaptörler zaten yalnız bu dört durumla ilerleme bildiriyor
-// (bkz. src/adapters/**/*.mjs içindeki tüm setState/track çağrıları);
-// waiting_otp/waiting_captcha/waiting_input gibi durumların zaten kendi
-// bekleme mekanizması var, burada tekrar beklenmiyor.
-const STEP_GATE_STATUSES = new Set(["opening", "filling", "submitted", "collecting"]);
+const IHSAN_BACKOFF_MS = [60000, 120000, 300000];
 
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -43,6 +38,7 @@ export class QueryEngine {
   #inputWaiters = new Map();
   #livePages = new Map();
   #ihsanSmsGate;
+  #saveChain = Promise.resolve();
   // "Oturum Aç": sorgu öncesinde, kullanıcının bir portala kendi elleriyle
   // (kalıcı olarak) giriş yapmasını sağlayan canlı oturum akışı. Job'a bağlı
   // değildir; portalId ile anahtarlanır. #openSessionPages canlı Playwright
@@ -73,17 +69,24 @@ export class QueryEngine {
 
     const selected = job.portalIds.map((id) => this.portalRegistry.get(id)).filter(Boolean);
     console.log(`[job:${job.id}] ${selected.length} portal ile başladı`);
-    // Kullanıcı talebi: portallar artık eşzamanlı değil, sırayla (biri
-    // bitmeden diğeri başlamadan) çalıştırılıyor; her aşamada canlı ekran
-    // gösterilip kullanıcının "Devam Et" demesi bekleniyor (bkz.
-    // #executePortal içindeki setState sarmalayıcısı ve #waitForStepContinue).
-    for (const portal of selected) {
-      if (job.cancelRequested) {
-        await this.#setPortalState(job, portal, "cancelled", "Sorgu iptal edildi");
-        continue;
-      }
-      await this.#executePortal(job, portal);
-    }
+    const ihsan = selected.filter((portal) => portal.adapter === "ihsan" || portal.adapter === "ihsan-frame");
+    const others = selected.filter((portal) => portal.adapter !== "ihsan" && portal.adapter !== "ihsan-frame");
+    const runPool = async (queue, concurrency) => {
+      let cursor = 0;
+      const worker = async () => {
+        while (cursor < queue.length) {
+          const portal = queue[cursor++];
+          if (job.cancelRequested) await this.#setPortalState(job, portal, "cancelled", "Sorgu iptal edildi");
+          else await this.#executePortal(job, portal);
+        }
+      };
+      await Promise.all(Array.from({ length: Math.min(concurrency, queue.length) }, worker));
+    };
+    // Toplam altı şerit: İhsan için 1, bağımsız portallar için 5.
+    await Promise.all([
+      runPool(ihsan, this.config.maxConcurrency),
+      runPool(others, this.config.genericConcurrency),
+    ]);
 
     job.results = deduplicateOffers(job.results);
     const states = Object.values(job.portalStates || {}).map((state) => state.status);
@@ -310,7 +313,9 @@ export class QueryEngine {
       return;
     }
     const adapter = getAdapter(portal);
-    for (let attempt = 0; attempt <= this.config.retryCount; attempt += 1) {
+    const ihsanPortal = portal.adapter === "ihsan" || portal.adapter === "ihsan-frame";
+    const maxRetries = ihsanPortal ? Math.max(this.config.retryCount, IHSAN_BACKOFF_MS.length) : this.config.retryCount;
+    for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
       try {
         const outcome = await this.browserManager.withPortalPage(portal, async (page) => {
           const result = await adapter.run({
@@ -323,9 +328,6 @@ export class QueryEngine {
             isCancelled: () => Boolean(job.cancelRequested),
             setState: async (status, message, extra = {}) => {
               await this.#setPortalState(job, portal, status, message, { attempt: attempt + 1, ...extra });
-              if (STEP_GATE_STATUSES.has(status) && !job.cancelRequested) {
-                await this.#waitForStepContinue(job, portal, page, status, message);
-              }
             },
             requestOtp: () => this.#waitForInput(job, portal, {
               inputId: "otp",
@@ -341,7 +343,9 @@ export class QueryEngine {
             requestSmsSlot: (portal.adapter === "ihsan" || portal.adapter === "ihsan-frame")
               ? () => this.#ihsanSmsGate.acquire()
               : undefined,
-            requestCaptchaSolve: () => this.#waitForCaptcha(job, portal, page),
+            // Canlı ekran/manüel ilerleme şimdilik kapalı. CAPTCHA aşılmaz;
+            // adaptör bu durumda manual_required ile güvenli biçimde durur.
+            requestCaptchaSolve: undefined,
             requestCaptchaCode: (imageDataUrl) => this.#waitForInput(job, portal, {
               inputId: "captcha_code",
               status: "waiting_input",
@@ -355,8 +359,11 @@ export class QueryEngine {
           return result;
         });
         if (outcome.offers?.length) job.results.push(...outcome.offers);
-        if (FAILURE_PORTAL_STATES.has(outcome.status)) {
-          await this.#waitForApproval(job, portal, outcome);
+        if (ihsanPortal && outcome.status === "rate_limited" && attempt < maxRetries) {
+          const waitMs = IHSAN_BACKOFF_MS[Math.min(attempt, IHSAN_BACKOFF_MS.length - 1)];
+          await this.#setPortalState(job, portal, "retrying", `İhsan SMS/hız kotası bekleniyor; ${Math.round(waitMs / 1000)} saniye sonra yeniden denenecek`, { attempt: attempt + 1 });
+          await delay(waitMs);
+          continue;
         }
         await this.#setPortalState(job, portal, outcome.status, outcome.message, {
           offerCount: outcome.offers?.length || 0,
@@ -373,7 +380,7 @@ export class QueryEngine {
           await this.#setPortalState(job, portal, "cancelled", "Sorgu iptal edildi");
           return;
         }
-        if (attempt < this.config.retryCount && isRetryable(error)) {
+        if (attempt < maxRetries && isRetryable(error)) {
           await this.#setPortalState(job, portal, "retrying", `Geçici bağlantı hatası; ${attempt + 2}. deneme hazırlanıyor`, { attempt: attempt + 1 });
           await delay(1200 * (attempt + 1));
           continue;
@@ -527,7 +534,11 @@ export class QueryEngine {
   }
 
   async #saveAndPublish(job, type, payload = {}) {
-    await this.store.saveJob(job);
-    this.events.publish(job.id, type, { ...payload, job: publicJob(job) });
+    const save = this.#saveChain.catch(() => {}).then(async () => {
+      await this.store.saveJob(job);
+      this.events.publish(job.id, type, { ...payload, job: publicJob(job) });
+    });
+    this.#saveChain = save;
+    await save;
   }
 }

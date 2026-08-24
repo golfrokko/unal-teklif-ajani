@@ -56,21 +56,20 @@ test("SMS gönderilir gönderilmez panel bekleme durumuna geçirilir", async () 
   assert.ok(portalInputIndex > sendIndex);
 });
 
-test("IBK/Emax resim CAPTCHA kodu panelde ayrı alanla gösterilir", async () => {
+test("SMS alanı panelde kalır, canlı ekran ve manuel devam tetiklenmez", async () => {
   const engine = await readFile(new URL("../src/engine.mjs", import.meta.url), "utf8");
   const panel = await readFile(new URL("../public/app.js", import.meta.url), "utf8");
-  assert.match(engine, /inputKind: "image_captcha"/);
-  assert.match(engine, /inputId: "captcha_code"/);
-  assert.match(panel, /captcha-code-image/);
-  assert.match(panel, /Resimdeki kodu aşağıya yazın/);
+  assert.match(engine, /requestCaptchaSolve: undefined/);
+  assert.match(panel, /const waitingForCaptcha = false/);
+  assert.match(panel, /state\.status === "waiting_otp"/);
 });
 
 test("canlı keşif portalları otomatik sorgulanmaz, kullanıcı seçimi bekler", async () => {
   const source = await readFile(new URL("../src/server.mjs", import.meta.url), "utf8");
-  assert.match(source, /available: enabled \|\| discoveredReady/);
+  assert.match(source, /available: portal\.deactivated \? false : \(enabled \|\| discoveredReady\)/);
   // Açık seçim yoksa yalnız "enabled" portallar sorgulanır; kullanıcı elle
   // seçtiyse hazır görünmeyen portal da (ör. önce Oturum Aç ile hazırlanan)
   // sorguya dahil edilebilir.
-  assert.match(source, /hasExplicitSelection \|\| portalView\(portal\)\.enabled/);
+  assert.match(source, /!portal\.deactivated && \(hasExplicitSelection \|\| portalView\(portal\)\.enabled\)/);
   assert.doesNotMatch(source, /enabled:.*discoveredReady/);
 });
