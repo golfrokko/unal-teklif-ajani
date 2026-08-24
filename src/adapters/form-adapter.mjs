@@ -792,6 +792,13 @@ const NO_OFFER_PATTERN = foldAnyPattern(["TEKLİF BULUNAMADI", "UYGUN TEKLİF YO
 const SMS_LANGUAGE_PATTERN = foldAnyPattern(["SMS", "TEK KULLANIMLIK", "DOĞRULAMA KODU", "ONAY KODU", "CEP TELEFONUNUZA"]);
 const RESULT_PROGRESS_PATTERN = foldAnyPattern(["TEKLİF SONUÇLARI", "TEKLİFLER SORGULANIYOR", "SORGULAMA DURUMU", "FİYATLAR HAZIRLANIYOR"]);
 
+// Bazı karşılaştırma sitelerinde başlangıçta tek (öne çıkan/en ucuz) teklif
+// gösterilip diğerleri bu tür bir düğmenin arkasında saklı kalıyor.
+export const REVEAL_ALL_OFFERS_BUTTON_NAMES = [
+  "Tüm Teklifleri Gör", "Diğer Teklifleri Gör", "Tüm Teklifler", "Bütün Teklifler",
+  "Daha Fazla Teklif", "Tümünü Gör", "Diğer Şirketler", "Diğer Teklifler",
+].map((phrase) => turkishFoldRegex(phrase));
+
 export function pageState(text) {
   if (RATE_LIMITED_PATTERN.test(text)) return "rate_limited";
   if (AUTH_LOGIN_PATTERN.test(text) && AUTH_PASSWORD_PATTERN.test(text)) return "auth_required";
@@ -873,6 +880,13 @@ export async function waitForOutcome({ page, target, job, portal, resultTimeoutM
       continue;
     }
 
+    // Bazı karşılaştırma sitelerinde başlangıçta yalnızca öne çıkan/en ucuz
+    // tek teklif gösterilip geri kalanı "Tüm Teklifleri Gör" gibi bir
+    // düğmenin arkasında saklı tutuluyor (kullanıcı gözlemi: Dijipol tek
+    // teklif döndürüyordu). Böyle bir düğme varsa açığa çıkarmayı dener;
+    // yoksa no-op (sayfada yoksa hızlıca vazgeçer).
+    await clickNamedButton(target, REVEAL_ALL_OFFERS_BUTTON_NAMES).catch(() => {});
+
     const offers = extractOffersFromText(text, portal);
     if (offers.length) {
       const fingerprint = JSON.stringify(offers.map((offer) => [offer.company, offer.price]));
@@ -881,7 +895,13 @@ export async function waitForOutcome({ page, target, job, portal, resultTimeoutM
         lastOffers = offers;
         lastOfferChangeAt = Date.now();
       }
-      if (Date.now() - lastOfferChangeAt >= 8000) return { status: "completed", message: `${offers.length} şirket teklifi alındı`, offers };
+      // Not: kullanıcı gözlemi (Dijipol) — bazı karşılaştırma sitelerinde
+      // şirket teklifleri tek seferde değil, birer birer (bazen >8sn arayla)
+      // yükleniyor. Eski 8sn'lik "değişmedi -> bitti" varsayımı bu durumda
+      // erken davranıp yalnız ilk gelen teklifi döndürüyordu. Daha sabırlı
+      // (20sn) bir durağanlık penceresi, toplam resultTimeoutMs bütçesi
+      // içinde kalarak eksik teklif riskini azaltıyor.
+      if (Date.now() - lastOfferChangeAt >= 20000) return { status: "completed", message: `${offers.length} şirket teklifi alındı`, offers };
     }
     if (RESULT_PROGRESS_PATTERN.test(text)) {
       await track("collecting", "Sigorta şirketlerinden fiyat bekleniyor");

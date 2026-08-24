@@ -122,6 +122,48 @@
   cursor: not-allowed;
 }
 
+/* "Site site ilerle, her aşamada ekran ver, devam et'i ben uygulayayım":
+   her aşama (opening/filling/submitted/collecting) geçişinde gösterilen
+   canlı ekran + "Devam Et" kartı. CAPTCHA kartıyla aynı düzeni kullanır,
+   ayırt edilmesi için mavi vurgu rengi taşır. */
+.progress-item[data-status="awaiting_continue"] .progress-row {
+  border-color: #a9c9f2;
+  border-bottom-right-radius: 0;
+  border-bottom-left-radius: 0;
+  background: #f4f9ff;
+}
+
+.progress-row[data-status="awaiting_continue"] i {
+  background: #2f7ed6;
+  box-shadow: 0 0 0 4px #dcebfb;
+}
+
+.step-inline {
+  border-color: #a9c9f2;
+  background: linear-gradient(135deg, #f4f9ff, #fff);
+}
+
+.step-inline .captcha-live-wrap {
+  border-color: #a9c9f2;
+}
+
+.step-continue {
+  margin-left: auto;
+  padding: 9px 16px;
+  border: 0;
+  border-radius: 8px;
+  background: #2f7ed6;
+  color: #fff;
+  font-size: 8px;
+  font-weight: 850;
+  cursor: pointer;
+}
+
+.step-continue:disabled {
+  opacity: .65;
+  cursor: not-allowed;
+}
+
 .otp-inline {
   margin: 0;
   padding: 12px;

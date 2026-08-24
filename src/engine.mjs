@@ -7,21 +7,15 @@ import { RESEND_SENTINEL, safeMessage } from "./lib/validation.mjs";
 
 const SUCCESS_PORTAL_STATES = new Set(["completed", "no_offer", "skipped_sms"]);
 const FAILURE_PORTAL_STATES = new Set(["mapping_required", "input_required", "access_blocked", "auth_required", "manual_required", "rate_limited", "timeout", "error", "interrupted"]);
+// Kullanıcı talebi: her aşamada canlı ekran gösterilip "Devam Et" onayı
+// beklensin. Adaptörler zaten yalnız bu dört durumla ilerleme bildiriyor
+// (bkz. src/adapters/**/*.mjs içindeki tüm setState/track çağrıları);
+// waiting_otp/waiting_captcha/waiting_input gibi durumların zaten kendi
+// bekleme mekanizması var, burada tekrar beklenmiyor.
+const STEP_GATE_STATUSES = new Set(["opening", "filling", "submitted", "collecting"]);
 
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-async function mapLimit(items, limit, callback) {
-  let nextIndex = 0;
-  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
-    while (nextIndex < items.length) {
-      const current = nextIndex;
-      nextIndex += 1;
-      await callback(items[current], current);
-    }
-  });
-  await Promise.all(workers);
 }
 
 function isRetryable(error) {
@@ -79,25 +73,17 @@ export class QueryEngine {
 
     const selected = job.portalIds.map((id) => this.portalRegistry.get(id)).filter(Boolean);
     console.log(`[job:${job.id}] ${selected.length} portal ile başladı`);
-    const isIhsan = (portal) => portal.adapter === "ihsan" || portal.adapter === "ihsan-frame";
-    const ihsanPortals = selected.filter(isIhsan);
-    const genericPortals = selected.filter((portal) => !isIhsan(portal));
-    const runPortal = async (portal) => {
+    // Kullanıcı talebi: portallar artık eşzamanlı değil, sırayla (biri
+    // bitmeden diğeri başlamadan) çalıştırılıyor; her aşamada canlı ekran
+    // gösterilip kullanıcının "Devam Et" demesi bekleniyor (bkz.
+    // #executePortal içindeki setState sarmalayıcısı ve #waitForStepContinue).
+    for (const portal of selected) {
       if (job.cancelRequested) {
         await this.#setPortalState(job, portal, "cancelled", "Sorgu iptal edildi");
-        return;
+        continue;
       }
       await this.#executePortal(job, portal);
-    };
-    // İhsan altyapılı siteler paylaşılan bir backend'i (ve SMS hız sınırını)
-    // paylaştığı için sınırlı/sıralı çalıştırılır; diğer genel karşılaştırma
-    // siteleri arasında böyle bir çakışma riski olmadığından sunucu
-    // kaynağı elverdiğince (genericConcurrency) çok daha yüksek paralellikte
-    // çalıştırılıp toplam sorgu süresi kısaltılır.
-    await Promise.all([
-      mapLimit(ihsanPortals, this.config.maxConcurrency, runPortal),
-      mapLimit(genericPortals, this.config.genericConcurrency, runPortal),
-    ]);
+    }
 
     job.results = deduplicateOffers(job.results);
     const states = Object.values(job.portalStates || {}).map((state) => state.status);
@@ -186,6 +172,16 @@ export class QueryEngine {
   // Bu üç metod o canlı etkileşimi taşır.
   resumeCaptcha(jobId, portalId) {
     const key = `${jobId}:${portalId}:captcha`;
+    const waiter = this.#inputWaiters.get(key);
+    if (!waiter) return false;
+    waiter.resolve();
+    return true;
+  }
+
+  // Her aşamada gösterilen canlı ekrandan "Devam Et" ile bir sonraki adıma
+  // geçişi tetikler (bkz. #waitForStepContinue).
+  continueStep(jobId, portalId) {
+    const key = `${jobId}:${portalId}:step`;
     const waiter = this.#inputWaiters.get(key);
     if (!waiter) return false;
     waiter.resolve();
@@ -325,7 +321,12 @@ export class QueryEngine {
             resultTimeoutMs: portal.resultTimeoutMs || this.config.resultTimeoutMs,
             historyLookupDelayMs: this.config.historyLookupDelayMs,
             isCancelled: () => Boolean(job.cancelRequested),
-            setState: (status, message, extra = {}) => this.#setPortalState(job, portal, status, message, { attempt: attempt + 1, ...extra }),
+            setState: async (status, message, extra = {}) => {
+              await this.#setPortalState(job, portal, status, message, { attempt: attempt + 1, ...extra });
+              if (STEP_GATE_STATUSES.has(status) && !job.cancelRequested) {
+                await this.#waitForStepContinue(job, portal, page, status, message);
+              }
+            },
             requestOtp: () => this.#waitForInput(job, portal, {
               inputId: "otp",
               status: "waiting_otp",
@@ -438,6 +439,44 @@ export class QueryEngine {
       });
       this.#livePages.set(pageKey, page);
       await this.#setPortalState(job, portal, "waiting_captcha", `${portal.name} güvenlik kontrolü (CAPTCHA) gösteriyor; panelden canlı ekrana tıklayıp kendiniz çözün, sonra devam edin`);
+    });
+  }
+
+  // Kullanıcı talebi: "site site ilerleyelim, her aşamada ekran ver, devam
+  // et'i ben uygulayayım". Adaptör her aşama geçişinde (opening/filling/
+  // submitted/collecting) setState çağırdığında burada duraklatılıp canlı
+  // ekran gösteriliyor; kullanıcı panelden "Devam Et" demeden bir sonraki
+  // adıma geçilmiyor. approvalTimeoutMs yalnız terk edilmiş bir işi süresiz
+  // kilitlememek için güvenlik ağı; normal akışta kullanıcının kendi hızı
+  // belirleyici.
+  #waitForStepContinue(job, portal, page, stageStatus, stageMessage) {
+    const key = `${job.id}:${portal.id}:step`;
+    const pageKey = `${job.id}:${portal.id}`;
+    return new Promise(async (resolve) => {
+      const timeout = setTimeout(() => {
+        this.#inputWaiters.delete(key);
+        this.#livePages.delete(pageKey);
+        resolve();
+      }, this.config.approvalTimeoutMs);
+      this.#inputWaiters.set(key, {
+        resolve: () => {
+          clearTimeout(timeout);
+          this.#inputWaiters.delete(key);
+          this.#livePages.delete(pageKey);
+          resolve();
+        },
+        reject: () => {
+          clearTimeout(timeout);
+          this.#inputWaiters.delete(key);
+          this.#livePages.delete(pageKey);
+          resolve();
+        },
+      });
+      this.#livePages.set(pageKey, page);
+      await this.#setPortalState(job, portal, "awaiting_continue", `${stageMessage} — devam etmek için "Devam Et"e basın`, {
+        pendingStatus: stageStatus,
+        pendingMessage: stageMessage,
+      });
     });
   }
 

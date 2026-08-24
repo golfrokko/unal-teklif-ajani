@@ -18,6 +18,7 @@ import {
   humanPause,
   pageState,
   resolveTarget,
+  REVEAL_ALL_OFFERS_BUTTON_NAMES,
   turkishFoldPattern,
   turkishFoldRegex,
   visibleText,
@@ -547,6 +548,8 @@ async function waitForIhsanOutcome({ page, target, job, portal, resultTimeoutMs,
       continue;
     }
 
+    await clickNamedButton(target, REVEAL_ALL_OFFERS_BUTTON_NAMES).catch(() => {});
+
     const offers = extractOffersFromText(text, portal);
     if (offers.length) {
       const fingerprint = JSON.stringify(offers.map((offer) => [offer.company, offer.price]));
@@ -554,7 +557,10 @@ async function waitForIhsanOutcome({ page, target, job, portal, resultTimeoutMs,
         lastOffers = offers;
         lastOfferChangeAt = Date.now();
       }
-      if (Date.now() - lastOfferChangeAt >= 5000) return { status: "completed", message: `${offers.length} şirket teklifi doğrulandı`, offers };
+      // form-adapter.mjs'deki aynı düzeltmeyle tutarlı: teklifler birer
+      // birer geldiğinde eski kısa (5sn) durağanlık penceresi eksik teklif
+      // listesiyle erken "bitti" diyordu; 20sn'ye çıkarıldı.
+      if (Date.now() - lastOfferChangeAt >= 20000) return { status: "completed", message: `${offers.length} şirket teklifi doğrulandı`, offers };
     }
 
     const hasDynamicStep = DYNAMIC_STEP_PATTERN.test(text);

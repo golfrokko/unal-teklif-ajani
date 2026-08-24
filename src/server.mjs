@@ -10,7 +10,7 @@ import { FileStore, publicJob } from "./lib/store.mjs";
 import { normalizeOtp, normalizePhone, safeMessage, validateJobInput } from "./lib/validation.mjs";
 import { QueryEngine } from "./engine.mjs";
 
-const VERSION = "1.12.0";
+const VERSION = "1.13.0";
 const portalRegistry = new Map(portals.map((portal) => [portal.id, Object.freeze({ ...portal })]));
 const store = new FileStore({ jobsDir: paths.jobsDir, settingsFile: paths.settingsFile, retentionDays: config.retentionDays });
 const events = new JobEvents();
@@ -422,6 +422,19 @@ app.post(["/api/v1/jobs/:jobId/captcha/:portalId/continue", "/api/jobs/:jobId/ca
   const job = store.getJob(req.params.jobId);
   if (!job) return res.status(404).json({ error: "Sorgu bulunamadı" });
   if (!engine.resumeCaptcha(job.id, req.params.portalId)) return res.status(409).json({ error: "Bu portal şu anda CAPTCHA çözümü beklemiyor" });
+  res.json({ ok: true });
+});
+
+// "Site site ilerle, her aşamada ekran ver, devam et'i ben uygulayayım":
+// her aşama geçişinde (opening/filling/submitted/collecting) engine
+// duraklıyor; bu uç nokta kullanıcının panelden "Devam Et"ine basınca bir
+// sonraki adıma geçişi tetikler. Canlı ekran/tıklama için mevcut
+// captcha/:portalId/live ve /click uç noktaları (yalnız jobId:portalId
+// anahtarına bakıyorlar) aynen tekrar kullanılıyor.
+app.post(["/api/v1/jobs/:jobId/step/:portalId/continue", "/api/jobs/:jobId/step/:portalId/continue"], (req, res) => {
+  const job = store.getJob(req.params.jobId);
+  if (!job) return res.status(404).json({ error: "Sorgu bulunamadı" });
+  if (!engine.continueStep(job.id, req.params.portalId)) return res.status(409).json({ error: "Bu portal şu anda devam onayı beklemiyor" });
   res.json({ ok: true });
 });
 
