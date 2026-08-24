@@ -39,7 +39,7 @@ const statusNames = {
 };
 
 const elements = Object.fromEntries([
-  "raw-data", "full-name", "identity", "birth-date", "plate", "registration", "registration-date", "vehicle", "year", "chassis", "engine", "usage-type",
+  "raw-data", "full-name", "identity", "authorized-identity", "birth-date", "plate", "registration", "registration-date", "vehicle", "year", "chassis", "engine", "usage-type",
   "phone", "email", "consent", "start-button", "parse-status", "portal-groups", "progress", "progress-list",
   "progress-title", "progress-subtitle", "job-status", "cancel-button", "log", "log-list", "log-count",
   "error-log", "error-log-list", "error-log-count", "session-check-status",
@@ -198,6 +198,7 @@ function parseVehicleData(raw) {
   return {
     fullName: raw.match(/(?:ad\s*\/?\s*soy\s*ad(?:ı)?|sigortalı(?:\s*adı\s*soyadı)?|müşteri\s*adı\s*soyadı|isim\s*soyisim|poliçe\s*sahibi)[^:\n]*:\s*([^\n\d:]{3,60})/i)?.[1]?.replace(/\s+/g, " ").trim() || "",
     identity: raw.match(/(?:t\.?c\.?|tc|vkn|vergi)[^0-9]*(\d{10,11})/i)?.[1] || "",
+    authorizedIdentity: raw.match(/(?:yetkili(?:\s+kişi)?(?:\s+t\.?c\.?)?|şirket\s+yetkilisi(?:\s+t\.?c\.?)?)[^0-9]*(\d{11})/i)?.[1] || "",
     birthDate: raw.match(/(?:doğum(?:\s+tarihi)?|dogum(?:\s+tarihi)?)[^0-9]*(\d{1,2}[./-]\d{1,2}[./-]\d{4})/i)?.[1] || "",
     plate: raw.match(/(?:plaka)[^A-ZÇĞİÖŞÜ0-9]*((?:0[1-9]|[1-7]\d|8[01])\s*[A-ZÇĞİÖŞÜ]{1,3}\s*\d{2,5})/i)?.[1]?.replace(/\s+/g, " ").toUpperCase() || "",
     registration: raw.match(/(?:ruhsat(?:\s+tescil)?(?:\s+seri)?(?:\s+belge)?(?:\s+no(?:su)?)?|tescil(?:\s+belge)?(?:\s+seri)?(?:\s+no(?:su)?)?|belge(?:\s+seri(?:\s+no)?)?)[^A-ZÇĞİÖŞÜ0-9]*([A-ZÇĞİÖŞÜ]{1,3}\s*\d{5,8})/i)?.[1]?.replace(/\s+/g, "").toUpperCase() || "",
@@ -214,6 +215,7 @@ function parseVehicleData(raw) {
 function setParsed(data) {
   elements["full-name"].value = data.fullName || "";
   elements.identity.value = data.identity || "";
+  elements["authorized-identity"].value = data.authorizedIdentity || "";
   elements["birth-date"].value = data.birthDate || "";
   elements.plate.value = data.plate || "";
   elements.registration.value = data.registration || "";
@@ -232,6 +234,7 @@ function getVehicle() {
   return {
     fullName: elements["full-name"].value,
     identity: elements.identity.value,
+    authorizedIdentity: elements["authorized-identity"].value,
     birthDate: elements["birth-date"].value,
     plate: elements.plate.value,
     registration: elements.registration.value,
@@ -366,6 +369,9 @@ function renderProgress(job) {
     const inputLabel = waitingForOtp ? "SMS doğrulaması" : escapeHtml(state.inputLabel || "Ek bilgi");
     const inputCopy = waitingForOtp ? "Telefona gelen kodu aşağıya yazın. Kod yalnız bu firmaya gönderilir." : "Portal bu bilgiyi istiyor; aşağıya yazıp gönderin.";
     const choices = !waitingForOtp && Array.isArray(state.inputChoices) ? state.inputChoices : null;
+    const captchaImage = waitingForInput && state.inputKind === "image_captcha" && state.captchaImage
+      ? `<img class="captcha-code-image" src="${escapeHtml(state.captchaImage)}" alt="${portalName} güvenlik kodu" />`
+      : "";
     const field = choices?.length
       ? `<select aria-label="${portalName} ${inputLabel}" required ${otpState ? "disabled" : ""}><option value="">Seçiniz</option>${choices.map((choice) => `<option value="${escapeHtml(choice.value)}">${escapeHtml(choice.label)}</option>`).join("")}</select>`
       : `<input inputmode="${waitingForOtp ? "numeric" : "text"}" autocomplete="${waitingForOtp ? "one-time-code" : "off"}" maxlength="${waitingForOtp ? 8 : 64}" placeholder="${waitingForOtp ? "SMS kodu" : inputLabel}" aria-label="${portalName} ${inputLabel}" required ${otpState ? "disabled" : ""} />`;
@@ -376,7 +382,7 @@ function renderProgress(job) {
         </div>
         ${(waitingForOtp || waitingForInput) ? `
           <form class="otp-entry otp-inline" data-portal-id="${portalId}" data-input-id="${inputId}">
-            <div class="otp-inline-copy"><strong>${portalName} ${inputLabel}</strong><small>${inputCopy}</small></div>
+            <div class="otp-inline-copy"><strong>${portalName} ${inputLabel}</strong><small>${state.inputKind === "image_captcha" ? "Resimdeki kodu aşağıya yazın; kod yalnız bu firmaya gönderilir." : inputCopy}</small>${captchaImage}</div>
             <div class="otp-inline-fields">${field}<button type="submit" ${otpState ? "disabled" : ""}>${otpState === "sending" ? "Gönderiliyor…" : otpState === "sent" ? "Gönderildi" : (waitingForOtp ? "Kodu doğrula" : "Gönder")}</button></div>
             ${waitingForOtp ? `<button type="button" class="otp-resend" data-portal-id="${portalId}" ${otpState ? "disabled" : ""}>SMS gelmedi mi? Kodu tekrar gönder</button>` : ""}
             ${otpErrorState.has(state.portalId) ? `<p class="otp-inline-error">${escapeHtml(otpErrorState.get(state.portalId))}</p>` : ""}
@@ -727,6 +733,7 @@ async function pollJob() {
 async function startJob() {
   const vehicle = getVehicle();
   if (!/^\d{10,11}$/.test(vehicle.identity.replace(/\D/g, "")) || !vehicle.plate) return showError("TC/VKN ve plaka zorunludur.");
+  if (vehicle.identity.replace(/\D/g, "").length === 10 && !/^\d{11}$/.test(vehicle.authorizedIdentity.replace(/\D/g, ""))) return showError("VKN sorgularında şirket yetkilisinin TC numarası zorunludur.");
   if (!elements.consent.checked) return showError("Müşteri sorgulama onayını işaretleyin.");
   const portalIds = selectedPortalIds();
   if (!portalIds.length) return showError("En az bir portal seçin.");
