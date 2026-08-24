@@ -14,10 +14,18 @@ test("teklif e-postasını doğrular", () => {
 });
 
 test("araç alanlarını güvenli biçimde normalize eder", () => {
-  const vehicle = normalizeVehicle({ identity: "123 456 789 01", plate: "16 jd 625", chassis: " w0la hl48 " });
+  const vehicle = normalizeVehicle({ identity: "123 456 789 01", authorizedIdentity: "111 222 333 44", plate: "16 jd 625", chassis: " w0la hl48 " });
   assert.equal(vehicle.identity, "12345678901");
+  assert.equal(vehicle.authorizedIdentity, "11122233344");
   assert.equal(vehicle.plate, "16 JD 625");
   assert.equal(vehicle.chassis, "W0LAHL48");
+});
+
+test("VKN sorgusunda şirket yetkilisi TC zorunludur", () => {
+  const missing = validateJobInput({ customerConsent: true, mode: "no_sms", vehicle: { identity: "1234567890", plate: "16JD625" } }, "");
+  assert.match(missing.error, /yetkilisinin/);
+  const valid = validateJobInput({ customerConsent: true, mode: "no_sms", vehicle: { identity: "1234567890", authorizedIdentity: "12345678901", plate: "16JD625" } }, "");
+  assert.equal(valid.error, undefined);
 });
 
 test("müşteri onayı olmadan iş oluşturmaz", () => {
