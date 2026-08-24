@@ -342,6 +342,12 @@ export class QueryEngine {
               ? () => this.#ihsanSmsGate.acquire()
               : undefined,
             requestCaptchaSolve: () => this.#waitForCaptcha(job, portal, page),
+            requestCaptchaCode: (imageDataUrl) => this.#waitForInput(job, portal, {
+              inputId: "captcha_code",
+              status: "waiting_input",
+              message: `${portal.name} resim güvenlik kodunu bekliyor`,
+              extra: { inputLabel: "Güvenlik kodu", inputKind: "image_captcha", captchaImage: imageDataUrl },
+            }),
           });
           if (result.status && FAILURE_PORTAL_STATES.has(result.status)) {
             result.screenshotPath = await this.#captureScreenshot(page, job.id, portal.id);
