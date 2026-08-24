@@ -5,14 +5,17 @@ import {
   detectCaptcha,
   fillBirthDate,
   fillFirst,
+  fillOtpCode,
   fillSplitRegistrationIfPresent,
   fillVisibleInputsByOrder,
+  findOtpInput,
   formSignature,
   humanPause,
   resolveTarget,
   visibleText,
   waitForOutcome,
 } from "../form-adapter.mjs";
+import { RESEND_SENTINEL } from "../../lib/validation.mjs";
 
 // Polinet (polinet) — kullanıcı gözlemine göre canlı formun alanları belirgin
 // bir isim/etiket taşımıyor; sıraya göre doldurulmalı:
@@ -64,10 +67,35 @@ export class PolinetAdapter extends FormPortalAdapter {
     }
     if (isCancelled()) return { status: "cancelled", message: "Sorgu iptal edildi" };
 
+    // Doğum tarihinden sonra, plaka/ruhsat ekranından önce Polinet SMS
+    // doğrulaması gösterebiliyor. Kod alanı görünürse panelden alınan kodu
+    // aynı canlı forma yazıp onaylıyoruz; görünmezse oturum açık kabul edilip
+    // normal akış sürüyor.
+    const otpDeadline = Date.now() + 20000;
+    let otpTarget = await resolveTarget(page, portal);
+    let otpInput = null;
+    while (Date.now() < otpDeadline && !(otpInput = await findOtpInput(otpTarget))) {
+      const currentText = await visibleText(otpTarget);
+      if (/PLAKA|RUHSAT|BELGE SER[İI]/i.test(currentText.toLocaleUpperCase("tr-TR"))) break;
+      await page.waitForTimeout(500);
+      otpTarget = await resolveTarget(page, portal);
+    }
+    if (otpInput) {
+      if (job.mode === "no_sms") return { status: "skipped_sms", message: "SMS istendiği için atlandı" };
+      let code = await requestOtp();
+      while (code === RESEND_SENTINEL) {
+        if (!await clickNamedButton(otpTarget, [/Tekrar Gönder/i, /Yeniden Gönder/i, /SMS Gönder/i])) return { status: "mapping_required", message: "SMS tekrar gönderme düğmesi bulunamadı" };
+        code = await requestOtp();
+      }
+      if (!await fillOtpCode(otpTarget, code)) return { status: "mapping_required", message: "Polinet SMS kodu alanı doldurulamadı" };
+      if (!await clickNamedButton(otpTarget, [/Doğrula/i, /Onayla/i, /Devam/i])) await otpInput.press("Enter").catch(() => {});
+      await page.waitForTimeout(1200);
+    }
+
     // Kullanıcı gözlemi: bu adımdan sonra script'in yüklenip plaka/ruhsat
     // ekranını hazırlaması ortalama ~20 saniye sürüyor.
     await setState("collecting", "Script yükleniyor; plaka/ruhsat ekranı bekleniyor");
-    await page.waitForTimeout(20000);
+    await page.waitForTimeout(otpInput ? 5000 : 20000);
     if (isCancelled()) return { status: "cancelled", message: "Sorgu iptal edildi" };
 
     await setState("filling", "Plaka ve ruhsat bilgileri dolduruluyor");
