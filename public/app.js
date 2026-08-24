@@ -42,6 +42,7 @@ const elements = Object.fromEntries([
   "raw-data", "full-name", "identity", "birth-date", "plate", "registration", "registration-date", "vehicle", "year", "chassis", "engine", "usage-type",
   "phone", "email", "consent", "start-button", "parse-status", "portal-groups", "progress", "progress-list",
   "progress-title", "progress-subtitle", "job-status", "cancel-button", "log", "log-list", "log-count",
+  "activity-log", "activity-log-list", "activity-log-count",
   "error-log", "error-log-list", "error-log-count", "session-check-status",
   "results", "results-body", "result-count", "otp-dock",
   "otp-cards", "otp-count", "error-banner", "portal-count", "max-concurrency", "concurrency-stat",
@@ -57,6 +58,7 @@ let pollTimer = null;
 let announcedOtpPortals = new Set();
 const otpSubmissionState = new Map();
 const otpErrorState = new Map();
+const otpDraftState = new Map();
 const ACTIVE_JOB_STATUSES = new Set(["queued", "running", "cancelling"]);
 const ACTIVE_JOB_STORAGE_KEY = "unal-teklif-active-job";
 let portalRefreshTimer = null;
@@ -102,11 +104,19 @@ function logLevelForStatus(status) {
 }
 
 function renderLog() {
-  elements.log.classList.toggle("hidden", jobLog.length === 0);
-  elements["log-count"].textContent = `${jobLog.length} kayıt`;
-  elements["log-list"].innerHTML = jobLog.length
+  const sidebarRows = jobLog.length
     ? [...jobLog].reverse().map((entry) => `<div class="sidebar-log-row" data-level="${entry.level}"><i></i><div><time>${entry.time.toLocaleTimeString("tr-TR")}</time><p>${entry.html}</p></div></div>`).join("")
     : `<div class="sidebar-log-empty">Henüz kayıt yok.</div>`;
+  const activityRows = jobLog.length
+    ? jobLog.map((entry) => `<div class="activity-log-row" data-level="${entry.level}"><i></i><time>${entry.time.toLocaleTimeString("tr-TR")}</time><p>${entry.html}</p></div>`).join("")
+    : `<div class="activity-log-empty">Sorgu başlayınca her adım burada anlaşılır biçimde görünecek.</div>`;
+
+  elements.log.classList.toggle("hidden", jobLog.length === 0);
+  elements["log-count"].textContent = `${jobLog.length} kayıt`;
+  elements["log-list"].innerHTML = sidebarRows;
+  elements["activity-log"].classList.toggle("hidden", jobLog.length === 0);
+  elements["activity-log-count"].textContent = `${jobLog.length} adım`;
+  elements["activity-log-list"].innerHTML = activityRows;
 }
 
 function appendLog(html, level = "info") {
@@ -431,10 +441,39 @@ function renderOtp(job) {
   const waitingApproval = Object.values(job.portalStates || {}).filter((state) => state.status === "waiting_approval");
   const waitingCaptcha = Object.values(job.portalStates || {}).filter((state) => state.status === "waiting_captcha");
   const waitingStep = Object.values(job.portalStates || {}).filter((state) => state.status === "awaiting_continue");
-  elements["otp-dock"].classList.add("hidden");
-  elements["otp-count"].textContent = `${waiting.length} portal panelden bilgi bekliyor`;
-  elements["otp-cards"].innerHTML = "";
-  document.querySelectorAll(".otp-entry").forEach((form) => form.addEventListener("submit", submitInlineValue));
+  for (const form of document.querySelectorAll("#otp-cards .otp-entry")) {
+    const input = form.querySelector("input, select");
+    if (input?.value) otpDraftState.set(form.dataset.portalId, input.value);
+  }
+  const waitingOtp = waiting.filter((state) => state.status === "waiting_otp");
+  elements["otp-dock"].classList.toggle("hidden", waitingOtp.length === 0);
+  elements["otp-count"].textContent = `${waitingOtp.length} portal SMS kodu bekliyor`;
+  elements["otp-cards"].innerHTML = waitingOtp.map((state) => {
+    const portalId = escapeHtml(state.portalId);
+    const portalName = escapeHtml(state.portalName);
+    const otpState = otpSubmissionState.get(state.portalId);
+    return `<article class="otp-card">
+      <h4>${portalName}</h4>
+      <p>${escapeHtml(state.message || "Telefona gelen SMS kodunu girin.")}</p>
+      <form class="otp-entry otp-dock-entry" data-portal-id="${portalId}" data-input-id="otp">
+        <input inputmode="numeric" autocomplete="one-time-code" maxlength="8" placeholder="SMS kodu" aria-label="${portalName} SMS kodu" required ${otpState ? "disabled" : ""} />
+        <button type="submit" ${otpState ? "disabled" : ""}>${otpState === "sending" ? "Gönderiliyor…" : otpState === "sent" ? "Gönderildi" : "Kodu doğrula"}</button>
+        <button type="button" class="otp-resend" data-portal-id="${portalId}" ${otpState ? "disabled" : ""}>Tekrar gönder</button>
+        ${otpErrorState.has(state.portalId) ? `<p class="otp-inline-error">${escapeHtml(otpErrorState.get(state.portalId))}</p>` : ""}
+      </form>
+    </article>`;
+  }).join("");
+  document.querySelectorAll(".otp-entry").forEach((form) => {
+    const input = form.querySelector("input, select");
+    if (input && otpDraftState.has(form.dataset.portalId)) input.value = otpDraftState.get(form.dataset.portalId);
+    input?.addEventListener("input", () => {
+      otpDraftState.set(form.dataset.portalId, input.value);
+      document.querySelectorAll(`.otp-entry[data-portal-id="${CSS.escape(form.dataset.portalId)}"] input`).forEach((peer) => {
+        if (peer !== input && document.activeElement !== peer) peer.value = input.value;
+      });
+    });
+    form.addEventListener("submit", submitInlineValue);
+  });
   document.querySelectorAll(".otp-resend").forEach((button) => button.addEventListener("click", requestResend));
   document.querySelectorAll(".approval-continue").forEach((button) => button.addEventListener("click", approvePortal));
   document.querySelectorAll(".captcha-continue").forEach((button) => button.addEventListener("click", continueCaptcha));
@@ -451,6 +490,9 @@ function renderOtp(job) {
   }
   for (const portalId of [...otpErrorState.keys()]) {
     if (!waitingIds.has(portalId)) otpErrorState.delete(portalId);
+  }
+  for (const portalId of [...otpDraftState.keys()]) {
+    if (!waitingIds.has(portalId)) otpDraftState.delete(portalId);
   }
   const freshOtp = waiting.find((state) => !announcedOtpPortals.has(state.portalId))
     || waitingApproval.find((state) => !announcedOtpPortals.has(state.portalId))
@@ -595,6 +637,7 @@ async function submitInlineValue(event) {
     const body = await response.json();
     if (!response.ok) throw new Error(body.error || "Gönderilemedi");
     otpSubmissionState.set(portalId, "sent");
+    otpDraftState.delete(portalId);
     button.textContent = "Gönderildi";
     await pollJob();
   } catch (error) {
@@ -735,6 +778,7 @@ async function startJob() {
   elements["start-button"].textContent = "Sorgu başlatılıyor...";
   announcedOtpPortals = new Set();
   otpSubmissionState.clear();
+  otpDraftState.clear();
   try {
     const body = await fetchJson("/api/jobs", {
       method: "POST",
