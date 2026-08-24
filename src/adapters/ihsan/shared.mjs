@@ -23,6 +23,8 @@ import {
   resolveTarget,
   REVEAL_ALL_OFFERS_BUTTON_NAMES,
   selectCorporateMode,
+  scrollOfferResults,
+  turkishFoldExact,
   turkishFoldPattern,
   turkishFoldRegex,
   visibleText,
@@ -511,6 +513,12 @@ async function waitForIhsanOutcome({ page, target, job, portal, resultTimeoutMs,
       await page.waitForTimeout(500);
       continue;
     }
+    const readyPopup = target.getByText(turkishFoldRegex("Teklif Hazır")).first();
+    if (await readyPopup.isVisible({ timeout: 250 }).catch(() => false)) {
+      await clickNamedButton(target, [turkishFoldExact("Tamam")]).catch(() => {});
+      await page.waitForTimeout(500);
+      continue;
+    }
     const text = await visibleText(target);
     captureSharedFacts(job, text);
     if (BLOCK_PATTERN.test(text)) return { status: "access_blocked", message: "Portal güvenlik duvarı bu sunucunun erişimini engelledi" };
@@ -543,6 +551,7 @@ async function waitForIhsanOutcome({ page, target, job, portal, resultTimeoutMs,
     }
 
     await clickNamedButton(target, REVEAL_ALL_OFFERS_BUTTON_NAMES).catch(() => {});
+    await scrollOfferResults(target);
 
     // form-adapter.mjs'deki toplama mantığıyla birebir aynı: o anki görüntü
     // değil, sorgu boyunca görülen tüm teklifler biriktirilir; toplama
@@ -741,7 +750,7 @@ export class IhsanPortalAdapter {
     const filled = await fillIhsanFields(target, job);
     const requiredFilled = filled.identity && filled.plate && filled.registration && (job.vehicle.identity.length !== 11 || filled.birthDate);
     if (!requiredFilled) return { status: "mapping_required", message: "İhsan formunun zorunlu alanları eşleştirilemedi", diagnostics: await pageProfile(target, page) };
-    if (!await clickSubmit(target)) return { status: "mapping_required", message: "İhsan formunun Gönder düğmesi eşleştirilemedi", diagnostics: await pageProfile(target, page) };
+    if (!await clickNamedButton(target, [turkishFoldExact("Gönder")]) && !await clickSubmit(target)) return { status: "mapping_required", message: "İhsan formunun Gönder düğmesi eşleştirilemedi", diagnostics: await pageProfile(target, page) };
 
     await setState("submitted", "İlk form gönderildi; portalın cevabı doğrulanıyor");
     return waitForIhsanOutcome({ page, target, job, portal, resultTimeoutMs, historyLookupDelayMs, requestOtp, requestField, requestSmsSlot, setState, isCancelled });
