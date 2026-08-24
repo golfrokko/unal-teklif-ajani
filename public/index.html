@@ -13,6 +13,7 @@
     <nav>
       <a class="active" href="#new-query">＋ Yeni sorgu</a>
       <a href="#progress">↻ Sorgu durumu</a>
+      <a href="#activity-log">☷ Canlı işlem günlüğü</a>
       <a href="#portals">⌘ Portal havuzu</a>
       <a href="#results">▤ Teklif sonuçları</a>
     </nav>
@@ -123,6 +124,11 @@
     <section class="card progress-section hidden" id="progress">
       <div class="section-head"><div><span class="eyebrow orange">CANLI SORGULAMA</span><h3 id="progress-title">Portallar sıraya alındı</h3><p id="progress-subtitle">Beşerli gruplar hâlinde ilerliyor.</p></div><div class="progress-actions"><span id="job-status" class="status-pill">Hazırlanıyor</span><button id="cancel-button" class="cancel-button hidden" type="button">Sorguyu durdur</button></div></div>
       <div id="progress-list" class="progress-list"></div>
+    </section>
+
+    <section class="card activity-log-section hidden" id="activity-log">
+      <div class="section-head"><div><span class="eyebrow orange">CANLI İŞLEM GÜNLÜĞÜ</span><h3>Sorguda neler oluyor?</h3><p>Portal açma, bilgi gönderme, SMS bekleme, hata ve sonuç adımları anlaşılır sırayla burada tutulur.</p></div><b id="activity-log-count" class="result-count">0 adım</b></div>
+      <div id="activity-log-list" class="activity-log-list"></div>
     </section>
 
     <section class="card results-section hidden" id="results">
