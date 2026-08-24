@@ -65,3 +65,17 @@ test("canlı keşif portalları otomatik sorgulanmaz, kullanıcı seçimi bekler
   assert.match(source, /hasExplicitSelection \|\| portalView\(portal\)\.enabled/);
   assert.doesNotMatch(source, /enabled:.*discoveredReady/);
 });
+
+
+test("işlem günlüğü, durdurma düğmesi ve kalıcı SMS paneli arayüzde bulunur", async () => {
+  const [source, html] = await Promise.all([
+    readFile(new URL("../public/app.js", import.meta.url), "utf8"),
+    readFile(new URL("../public/index.html", import.meta.url), "utf8"),
+  ]);
+  assert.match(html, /id="activity-log"/);
+  assert.match(html, /id="cancel-button"/);
+  assert.match(html, /id="otp-dock"/);
+  assert.match(source, /otp-dock"\]\.classList\.toggle\("hidden", waitingOtp\.length === 0\)/);
+  assert.doesNotMatch(source, /otp-dock"\]\.classList\.add\("hidden"\)/);
+  assert.match(source, /const otpDraftState = new Map\(\)/);
+});
