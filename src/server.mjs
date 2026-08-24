@@ -27,7 +27,7 @@ function portalView(portal) {
   const probe = portalProbes[portal.id] || null;
   const session = sessionStatus[portal.id] || null;
   const discoveredReady = portal.adapter === "generic" && probe?.state === "form_detected";
-  const enabled = typeof setting.enabled === "boolean" ? setting.enabled : portal.defaultEnabled === true;
+  const enabled = portal.forceDisabled === true ? false : (typeof setting.enabled === "boolean" ? setting.enabled : portal.defaultEnabled === true);
   return {
     ...portal,
     enabled,
@@ -196,6 +196,9 @@ app.patch("/api/v1/portals/:id", async (req, res, next) => {
   try {
     const portal = portalRegistry.get(req.params.id);
     if (!portal) return res.status(404).json({ error: "Portal bulunamadı" });
+    if (portal.forceDisabled === true && req.body?.enabled === true) {
+      return res.status(409).json({ error: `${portal.name} pasif durumda ve sorgulamaya açılamaz` });
+    }
     portalSettings = {
       ...portalSettings,
       [portal.id]: {
@@ -340,7 +343,7 @@ async function createJob(req, res, next) {
     // için hazır görünmüyor, ama kullanıcı Oturum Aç ile hazırlayıp yine de
     // sorgulamak isteyebiliyor. Seçim yoksa eski davranış (yalnız enabled).
     const selected = portals.filter((portal) => (
-      requested.has(portal.id) && (hasExplicitSelection || portalView(portal).enabled)
+      requested.has(portal.id) && portal.forceDisabled !== true && (hasExplicitSelection || portalView(portal).enabled)
     ));
     if (!selected.length) return res.status(400).json({ error: "Etkin en az bir portal seçilmelidir" });
     const emailPortal = selected.find((portal) => portal.requiredFields?.includes("email"));
