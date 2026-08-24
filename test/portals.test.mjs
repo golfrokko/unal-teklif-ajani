@@ -17,9 +17,12 @@ test("doğrulanmış SMS politikaları korunur", () => {
   assert.equal(portals.find((portal) => portal.id === "enuygun").smsPolicy, "per_query");
 });
 
-test("yönlendirme ve bozuk istemci portalları çalışıyor gibi sunulmaz", () => {
-  assert.equal(portals.find((portal) => portal.id === "sigortala").diagnosticState, "client_error");
-  assert.equal(portals.find((portal) => portal.id === "policekes").diagnosticState, "client_error");
+test("PoliçeKes, Sigorta.la ve Emax güncel trafik URL'lerini kullanır", () => {
+  assert.equal(portals.find((portal) => portal.id === "policekes").url, "https://www.policekes.com/oto/trafik-sigortasi-satin-al?yenileme=0");
+  assert.equal(portals.find((portal) => portal.id === "sigortala").url, "https://sigorta.la/oto/trafik-sigortasi-satin-al?yenileme=0");
+  assert.equal(portals.find((portal) => portal.id === "emaxsigorta").url, "https://www.emaxsigorta.com.tr/teklif-al/trafik");
+  assert.equal(portals.find((portal) => portal.id === "ibksigorta").imageCaptcha, true);
+  assert.equal(portals.find((portal) => portal.id === "emaxsigorta").imageCaptcha, true);
 });
 
 test("yedi İhsan portalı canlı beta havuzunda ve varsayılan açık", () => {

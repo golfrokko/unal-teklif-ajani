@@ -56,6 +56,15 @@ test("SMS gönderilir gönderilmez panel bekleme durumuna geçirilir", async () 
   assert.ok(portalInputIndex > sendIndex);
 });
 
+test("IBK/Emax resim CAPTCHA kodu panelde ayrı alanla gösterilir", async () => {
+  const engine = await readFile(new URL("../src/engine.mjs", import.meta.url), "utf8");
+  const panel = await readFile(new URL("../public/app.js", import.meta.url), "utf8");
+  assert.match(engine, /inputKind: "image_captcha"/);
+  assert.match(engine, /inputId: "captcha_code"/);
+  assert.match(panel, /captcha-code-image/);
+  assert.match(panel, /Resimdeki kodu aşağıya yazın/);
+});
+
 test("canlı keşif portalları otomatik sorgulanmaz, kullanıcı seçimi bekler", async () => {
   const source = await readFile(new URL("../src/server.mjs", import.meta.url), "utf8");
   assert.match(source, /available: enabled \|\| discoveredReady/);

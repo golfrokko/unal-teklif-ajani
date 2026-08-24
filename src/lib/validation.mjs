@@ -34,6 +34,7 @@ export function normalizeVehicle(input = {}) {
   return {
     fullName: String(input.fullName || "").replace(/\s+/g, " ").trim().slice(0, 80),
     identity: String(input.identity || "").replace(/\D/g, "").slice(0, 11),
+    authorizedIdentity: String(input.authorizedIdentity || "").replace(/\D/g, "").slice(0, 11),
     birthDate: String(input.birthDate || "").trim().slice(0, 10),
     plate: String(input.plate || "").replace(/\s+/g, " ").trim().toLocaleUpperCase("tr-TR").slice(0, 12),
     registration: String(input.registration || "").replace(/\s+/g, "").trim().toLocaleUpperCase("tr-TR").slice(0, 24),
@@ -50,6 +51,7 @@ export function validateJobInput(body, defaultPhone, defaultEmail = "") {
   if (body?.customerConsent !== true) return { error: "Müşteri sorgulama onayı işaretlenmelidir" };
   const vehicle = normalizeVehicle(body?.vehicle);
   if (!/^\d{10,11}$/.test(vehicle.identity)) return { error: "Geçerli TC/VKN zorunludur" };
+  if (vehicle.identity.length === 10 && !/^\d{11}$/.test(vehicle.authorizedIdentity)) return { error: "VKN sorgularında şirket yetkilisinin 11 haneli TC numarası zorunludur" };
   if (!vehicle.plate) return { error: "Plaka zorunludur" };
   const mode = body?.mode === "no_sms" ? "no_sms" : "ask_sms";
   const phone = normalizePhone(body?.phone) || normalizePhone(defaultPhone);
