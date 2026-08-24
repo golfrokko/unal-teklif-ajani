@@ -16,8 +16,11 @@ export const config = Object.freeze({
   panelPassword: String(process.env.PANEL_PASSWORD || ""),
   defaultPhone: String(process.env.DEFAULT_PHONE || ""),
   defaultEmail: String(process.env.DEFAULT_EMAIL || "").trim(),
-  maxConcurrency: boundedNumber(process.env.MAX_CONCURRENCY, 3, 1, 5),
-  genericConcurrency: boundedNumber(process.env.GENERIC_CONCURRENCY, 10, 1, 20),
+  // İhsan portalları aynı altyapıyı/SMS kotasını paylaştığı için tek şerit;
+  // diğer portallar beş şerit. Böylece iş başına toplam en çok 6 portal
+  // çalışır, İhsan SMS cooldown'u da birbirine çarpmaz.
+  maxConcurrency: boundedNumber(process.env.MAX_CONCURRENCY, 1, 1, 1),
+  genericConcurrency: boundedNumber(process.env.GENERIC_CONCURRENCY, 5, 1, 5),
   probeConcurrency: boundedNumber(process.env.PROBE_CONCURRENCY, 8, 1, 15),
   maxActiveJobs: boundedNumber(process.env.MAX_ACTIVE_JOBS, 1, 1, 2),
   navigationTimeoutMs: boundedNumber(process.env.NAVIGATION_TIMEOUT_MS, 45000, 10000, 120000),

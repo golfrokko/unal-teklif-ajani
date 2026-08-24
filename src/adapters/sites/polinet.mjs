@@ -16,6 +16,7 @@ import {
   waitForOutcome,
 } from "../form-adapter.mjs";
 import { RESEND_SENTINEL } from "../../lib/validation.mjs";
+import { personalFormJob } from "./flow-tools.mjs";
 
 // Polinet (polinet) — kullanıcı gözlemine göre canlı formun alanları belirgin
 // bir isim/etiket taşımıyor; sıraya göre doldurulmalı:
@@ -49,7 +50,8 @@ export class PolinetAdapter extends FormPortalAdapter {
     const target = await resolveTarget(page, portal);
     const phone10 = job.phone.replace(/^0/, "");
     await setState("filling", "TC ve telefon dolduruluyor");
-    const [identityFilled] = await fillVisibleInputsByOrder(target, [job.vehicle.identity, phone10]);
+    const effectiveJob = personalFormJob(job);
+    const [identityFilled] = await fillVisibleInputsByOrder(target, [effectiveJob.vehicle.identity, phone10]);
     if (!identityFilled) return { status: "mapping_required", message: "Polinet'in ilk canlı veri alanları bulunamadı" };
     await humanPause();
     if (!await clickNamedButton(target, [/Trafik Sigortası Teklifi Al/i])) {

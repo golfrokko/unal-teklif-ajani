@@ -10,7 +10,7 @@ import { FileStore, publicJob } from "./lib/store.mjs";
 import { normalizeOtp, normalizePhone, safeMessage, validateJobInput } from "./lib/validation.mjs";
 import { QueryEngine } from "./engine.mjs";
 
-const VERSION = "1.15.0";
+const VERSION = "1.16.0";
 const portalRegistry = new Map(portals.map((portal) => [portal.id, Object.freeze({ ...portal })]));
 const store = new FileStore({ jobsDir: paths.jobsDir, settingsFile: paths.settingsFile, retentionDays: config.retentionDays });
 const events = new JobEvents();
@@ -31,7 +31,7 @@ function portalView(portal) {
   return {
     ...portal,
     enabled,
-    available: enabled || discoveredReady,
+    available: portal.deactivated ? false : (enabled || discoveredReady),
     integrationStatus: setting.integrationStatus || portal.integrationStatus || (portal.verifiedForm ? "configured_unverified" : "discovery"),
     lastVerifiedAt: setting.lastVerifiedAt || null,
     note: setting.note || "",
@@ -340,7 +340,7 @@ async function createJob(req, res, next) {
     // için hazır görünmüyor, ama kullanıcı Oturum Aç ile hazırlayıp yine de
     // sorgulamak isteyebiliyor. Seçim yoksa eski davranış (yalnız enabled).
     const selected = portals.filter((portal) => (
-      requested.has(portal.id) && (hasExplicitSelection || portalView(portal).enabled)
+      requested.has(portal.id) && !portal.deactivated && (hasExplicitSelection || portalView(portal).enabled)
     ));
     if (!selected.length) return res.status(400).json({ error: "Etkin en az bir portal seçilmelidir" });
     const emailPortal = selected.find((portal) => portal.requiredFields?.includes("email"));
