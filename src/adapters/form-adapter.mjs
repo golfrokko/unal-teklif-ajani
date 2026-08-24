@@ -477,7 +477,7 @@ const PHONE_LABELS = ["GSM", "Cep Telefonu", "Telefon"];
 // Sigortayeri: plaka, TC). portal.fieldOrder bu adımların BİR KISMINI
 // (veya tamamını) öne alabilir; listelenmeyen adımlar varsayılan
 // sıralarında sona eklenir, hiçbir alan atlanmaz.
-const DEFAULT_FIELD_ORDER = ["corporateMode", "identity", "birthDate", "plate", "registration", "phone", "chassis", "engine", "matbuVehicle", "registrationDate", "usageType", "occupation", "title", "seatCount", "fuelType", "hasarsizlik", "nameEmail"];
+const DEFAULT_FIELD_ORDER = ["corporateMode", "identity", "authorizedIdentity", "birthDate", "plate", "registration", "phone", "chassis", "engine", "matbuVehicle", "registrationDate", "usageType", "city", "district", "occupation", "title", "seatCount", "fuelType", "hasarsizlik", "nameEmail"];
 
 // Tüzel kişi sorgularında portallar "Bireysel/Kurumsal" sekmesi ya da
 // "TC Kimlik No / Vergi Kimlik No" seçimi istiyor. Yanlış (varsayılan
@@ -521,13 +521,37 @@ export async function fillQuoteForm(target, job, portal) {
         ['input[name*="identity" i]', 'input[name*="kimlik" i]', 'input[name*="tc" i]', 'input[placeholder*="TC" i]', 'input[placeholder*="kimlik" i]'],
         ["Kimlik Numarası", "TC Kimlik No", "TC/Vergi", "T.C. Kimlik", "TC Kimlik Numarası", "Vergi Kimlik No"]);
     },
-    birthDate: async () => { filled.birthDate = await fillBirthDate(target, vehicle.birthDate); },
+    authorizedIdentity: async () => {
+      if (!isCorporateJob(vehicle) || !vehicle.authorizedIdentity) return;
+      filled.authorizedIdentity = await fillFirst(target, vehicle.authorizedIdentity,
+        ['input[name*="yetkili" i]', 'input[id*="yetkili" i]', 'input[name*="authorized" i]', 'input[id*="authorized" i]'],
+        ["Yetkili TC", "Şirket Yetkilisi TC", "Yetkili Kimlik", "Doğum Tarihi"]);
+    },
+    birthDate: async () => {
+      if (isCorporateJob(vehicle) && vehicle.authorizedIdentity) return;
+      filled.birthDate = await fillBirthDate(target, vehicle.birthDate);
+    },
     plate: async () => {
       await ensurePlateAvailable(target);
       filled.plate = await fillFirst(target, vehicle.plate,
         ['input[name*="plate" i]', 'input[name*="plaka" i]', 'input[placeholder*="plaka" i]'], ["Plaka"]);
     },
     registration: async () => {
+      if (Array.isArray(portal?.registrationInputOrder)) {
+        const parts = String(vehicle.registration || "").match(/^([A-ZÇĞİÖŞÜ]+)(\d+)$/i);
+        const inputs = target.locator('input:not([type="hidden"]):not([type="checkbox"]):not([type="radio"]):not([type="submit"]):not([type="button"])');
+        if (parts) {
+          const [serialIndex, numberIndex] = portal.registrationInputOrder;
+          const serialInput = inputs.nth(serialIndex);
+          const numberInput = inputs.nth(numberIndex);
+          if (await serialInput.isVisible({ timeout: 300 }).catch(() => false) && await numberInput.isVisible({ timeout: 300 }).catch(() => false)) {
+            await fillHumanLike(serialInput, parts[1]);
+            await fillHumanLike(numberInput, parts[2]);
+            filled.registration = true;
+            return;
+          }
+        }
+      }
       filled.registration = (await fillSplitRegistrationIfPresent(target, vehicle.registration)) || (await fillFirst(target, vehicle.registration,
         ['input[name*="registration" i]', 'input[name*="ruhsat" i]', 'input[name*="belge" i]', 'input[name*="tescil" i]', 'input[placeholder*="ruhsat" i]'],
         ["Ruhsat Numarası", "Ruhsat Seri", "Belge Seri", "Ruhsat Tescil Belge Seri No", "Tescil Belge Seri No", "Ruhsat Seri No"]));
@@ -546,6 +570,17 @@ export async function fillQuoteForm(target, job, portal) {
     },
     matbuVehicle: async () => { await fillMatbuVehicleFields(target, vehicle); },
     registrationDate: async () => { filled.registrationDate = await fillRegistrationDate(target, vehicle.registrationDate); },
+    city: async () => {
+      if (!portal?.defaultCity) return;
+      filled.city = await fillFirst(target, portal.defaultCity,
+        ['select[name*="city" i]', 'select[name="il" i]', 'select[id="il" i]', 'input[name*="city" i]'], ["İl", "Şehir"]);
+      if (filled.city) await target.waitForTimeout(700).catch(() => {});
+    },
+    district: async () => {
+      if (!portal?.defaultDistrict) return;
+      filled.district = await fillFirst(target, portal.defaultDistrict,
+        ['select[name*="district" i]', 'select[name="ilce" i]', 'select[name="ilçe" i]', 'select[id="ilce" i]', 'input[name*="district" i]'], ["İlçe"]);
+    },
     // Bazı sitelerde sigortalı bilgileri ekranında "Meslek" gibi elimizde
     // hiç verisi olmayan bir çoktan seçmeli soruluyor (ör. Dijipol). Elimizde
     // gerçek bir meslek bilgisi olmadığından güvenli/genel "Diğer"
@@ -553,7 +588,7 @@ export async function fillQuoteForm(target, job, portal) {
     // Meslek elimizde olmayan bir bilgi; açılır listede de serbest metin
     // alanında da güvenli/genel "Diğer" kullanılır (ör. Sigortaladım).
     occupation: async () => {
-      filled.occupation = await fillFirst(target, "Diğer",
+      filled.occupation = await fillFirst(target, portal?.defaultOccupation || "Diğer",
         ['select[name*="meslek" i]', 'select[name*="occupation" i]', 'input[name*="meslek" i]', 'input[name*="occupation" i]'],
         ["Meslek", "Mesleğiniz", "Meslek Bilgisi"]);
     },
@@ -738,6 +773,45 @@ export async function detectCaptcha(page, text) {
     if (await candidates.nth(index).isVisible({ timeout: 200 }).catch(() => false)) return true;
   }
   return false;
+}
+
+export async function solveImageCaptcha(target, requestCaptchaCode) {
+  if (typeof requestCaptchaCode !== "function") return false;
+  const images = target.locator('img[src*="captcha" i], img[id*="captcha" i], img[class*="captcha" i], canvas[id*="captcha" i], canvas[class*="captcha" i]');
+  let image = null;
+  const imageCount = Math.min(await images.count().catch(() => 0), 12);
+  for (let index = 0; index < imageCount; index += 1) {
+    const candidate = images.nth(index);
+    if (await candidate.isVisible({ timeout: 250 }).catch(() => false)) { image = candidate; break; }
+  }
+  if (!image) return false;
+  const inputSelectors = [
+    'input[name*="captcha" i]', 'input[id*="captcha" i]', 'input[name*="security" i]', 'input[id*="security" i]',
+    'input[placeholder*="güvenlik kod" i]', 'input[placeholder*="resimde" i]', 'input[placeholder*="kodu gir" i]',
+  ];
+  let input = null;
+  for (const selector of inputSelectors) {
+    const candidate = target.locator(selector).first();
+    if (await candidate.isVisible({ timeout: 250 }).catch(() => false)) { input = candidate; break; }
+  }
+  if (!input) return false;
+  const buffer = await image.screenshot({ type: "png", timeout: 4000 }).catch(() => null);
+  if (!buffer) return false;
+  const code = String(await requestCaptchaCode(`data:image/png;base64,${buffer.toString("base64")}`) || "").trim();
+  if (!code) return false;
+  await fillHumanLike(input, code);
+  return true;
+}
+
+export async function scrollOfferResults(target) {
+  await target.evaluate(() => {
+    const scrollables = [...document.querySelectorAll("*")].filter((element) => {
+      const style = getComputedStyle(element);
+      return /(auto|scroll)/.test(style.overflowY) && element.scrollHeight > element.clientHeight + 80;
+    });
+    for (const element of scrollables) element.scrollTop = Math.min(element.scrollHeight, element.scrollTop + Math.max(500, element.clientHeight));
+    window.scrollTo(0, Math.min(document.documentElement.scrollHeight, window.scrollY + Math.max(700, window.innerHeight * .8)));
+  }).catch(() => {});
 }
 
 export async function findOtpInput(target) {
@@ -990,7 +1064,7 @@ async function hasEmptyIdentityField(target) {
   return !String(value || "").trim();
 }
 
-export async function waitForOutcome({ page, target, job, portal, resultTimeoutMs, requestOtp, requestCaptchaSolve, setState, isCancelled, attemptedStages = new Set() }) {
+export async function waitForOutcome({ page, target, job, portal, resultTimeoutMs, requestOtp, requestCaptchaSolve, requestCaptchaCode, setState, isCancelled, attemptedStages = new Set() }) {
   const startedAt = Date.now();
   let lastOffers = [];
   let lastOfferChangeAt = 0;
@@ -1023,6 +1097,12 @@ export async function waitForOutcome({ page, target, job, portal, resultTimeoutM
       throw new Error("Portal SMS servisi geçici olarak yanıt vermiyor (Timeout)");
     }
     if (await detectCaptcha(page, text)) {
+      if (portal?.imageCaptcha && await solveImageCaptcha(target, requestCaptchaCode)) {
+        if (!await clickSubmit(target)) return { status: "mapping_required", message: "Güvenlik kodu dolduruldu ancak Gönder düğmesi bulunamadı" };
+        await track("submitted", "Güvenlik kodu gönderildi; portal cevabı bekleniyor");
+        await page.waitForTimeout(900);
+        continue;
+      }
       if (typeof requestCaptchaSolve !== "function") {
         return { status: "manual_required", message: "CAPTCHA / güvenlik kontrolü kullanıcı tarafından tamamlanmalı" };
       }
@@ -1060,6 +1140,7 @@ export async function waitForOutcome({ page, target, job, portal, resultTimeoutM
     // teklif döndürüyordu). Böyle bir düğme varsa açığa çıkarmayı dener;
     // yoksa no-op (sayfada yoksa hızlıca vazgeçer).
     await clickNamedButton(target, REVEAL_ALL_OFFERS_BUTTON_NAMES).catch(() => {});
+    await scrollOfferResults(target);
 
     const visibleOffers = extractOffersFromText(text, portal);
     if (visibleOffers.length) {
@@ -1129,14 +1210,14 @@ export class FormPortalAdapter {
   }
 
   async run(context) {
-    const { page, portal, job, navigationTimeoutMs, resultTimeoutMs, setState, requestOtp, requestCaptchaSolve, isCancelled } = context;
+    const { page, portal, job, navigationTimeoutMs, resultTimeoutMs, setState, requestOtp, requestCaptchaSolve, requestCaptchaCode, isCancelled } = context;
     await setState("opening", "Portal açılıyor");
     await page.goto(portal.url, { waitUntil: "domcontentloaded", timeout: navigationTimeoutMs });
     await page.waitForTimeout(800);
     if (isCancelled()) return { status: "cancelled", message: "Sorgu iptal edildi" };
 
     let firstText = await visibleText(page);
-    for (let attempt = 0; await detectCaptcha(page, firstText); attempt += 1) {
+    for (let attempt = 0; !portal.imageCaptcha && await detectCaptcha(page, firstText); attempt += 1) {
       if (typeof requestCaptchaSolve !== "function" || attempt >= 5) {
         return { status: "manual_required", message: "CAPTCHA / güvenlik kontrolü kullanıcı tarafından tamamlanmalı" };
       }
@@ -1156,9 +1237,12 @@ export class FormPortalAdapter {
     const filled = await fillQuoteForm(target, job, portal);
     if (!filled.identity && !filled.plate && !filled.registration) return { status: "mapping_required", message: "İlk adımdaki kimlik, plaka veya ruhsat alanı eşleştirilemedi" };
     const attemptedStages = new Set([await formSignature(target)]);
+    if (portal.imageCaptcha && await detectCaptcha(page, await visibleText(target))) {
+      if (!await solveImageCaptcha(target, requestCaptchaCode)) return { status: "mapping_required", message: "Resim güvenlik kodu veya giriş alanı bulunamadı" };
+    }
     if (!await clickSubmit(target)) return { status: "mapping_required", message: "Sorgu düğmesi eşleştirilemedi" };
 
     await setState("submitted", "Form gönderildi; portal cevabı bekleniyor");
-    return waitForOutcome({ page, target, job, portal, resultTimeoutMs, requestOtp, requestCaptchaSolve, setState, isCancelled, attemptedStages });
+    return waitForOutcome({ page, target, job, portal, resultTimeoutMs, requestOtp, requestCaptchaSolve, requestCaptchaCode, setState, isCancelled, attemptedStages });
   }
 }
