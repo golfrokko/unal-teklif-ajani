@@ -105,6 +105,17 @@
   cursor: wait;
 }
 
+.captcha-code-image {
+  display: block;
+  width: auto;
+  max-width: min(420px, 100%);
+  max-height: 150px;
+  margin-top: 10px;
+  border: 1px solid #d8dee9;
+  border-radius: 8px;
+  background: #fff;
+}
+
 .captcha-continue {
   margin-left: auto;
   padding: 9px 16px;
