@@ -525,10 +525,9 @@ export async function fillQuoteForm(target, job, portal) {
       if (!isCorporateJob(vehicle) || !vehicle.authorizedIdentity) return;
       filled.authorizedIdentity = await fillFirst(target, vehicle.authorizedIdentity,
         ['input[name*="yetkili" i]', 'input[id*="yetkili" i]', 'input[name*="authorized" i]', 'input[id*="authorized" i]'],
-        ["Yetkili TC", "Şirket Yetkilisi TC", "Yetkili Kimlik", "Doğum Tarihi"]);
+        ["Yetkili TC", "Şirket Yetkilisi TC", "Yetkili Kimlik"]);
     },
     birthDate: async () => {
-      if (isCorporateJob(vehicle) && vehicle.authorizedIdentity) return;
       filled.birthDate = await fillBirthDate(target, vehicle.birthDate);
     },
     plate: async () => {
