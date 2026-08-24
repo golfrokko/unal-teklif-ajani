@@ -36,6 +36,14 @@ export function turkishFoldRegex(phrase, flags = "i") {
   return new RegExp(turkishFoldPattern(phrase), flags);
 }
 
+// DİKKAT: kısa düğme adları alt dize olarak eşleşince yanlış öğeye tıklanıyor.
+// Gerçek örnek: "İleri" deseni "Araç ve Ruhsat Bilgileri" başlığındaki
+// "Bilg-ileri" ile eşleşip başlığa tıklıyor ve akış yanlış ilerliyordu.
+// Bu tür adlar için baştan sona tam eşleşme kullanılmalı.
+export function turkishFoldExact(phrase, flags = "i") {
+  return new RegExp(`^\\s*${turkishFoldPattern(phrase)}\\s*$`, flags);
+}
+
 function valuesEffectivelyMatch(actual, expected) {
   const a = String(actual || "");
   const e = String(expected || "");
@@ -612,11 +620,15 @@ async function waitUntilEnabled(locator, timeoutMs) {
 // düğme yoksa son çare olarak kısayola geri dönüyoruz.
 const SHORTCUT_BUTTON_PATTERN = new RegExp(`(${turkishFoldPattern("hızlı")}|quick|express|ekspres)`, "i");
 
+// Uzun/ayırt edici adlar alt dize olarak güvenle aranabilir; tek kelimelik
+// kısa adlar ("İleri", "Devam", "Gönder", "Hesapla") sayfa metninde başka
+// kelimelerin içinde geçebildiğinden TAM eşleşme ister (bkz. turkishFoldExact).
 const SUBMIT_BUTTON_NAMES = [
-  "Gönder", "Teklif Al", "Teklifi Al", "Sorgula", "Devam", "Hemen Teklif", "Doğrula", "Onayla",
-  "Fiyat Gör", "Fiyatları Gör", "Fiyat Getir", "Fiyatları Getir", "Fiyat Hesapla", "Fiyatları Hesapla",
-  "Karşılaştır", "Teklifleri Görüntüle", "Devam Et", "İleri", "Hesapla",
-].map((phrase) => turkishFoldRegex(phrase));
+  ...["Teklif Al", "Teklifi Al", "Hemen Teklif", "Fiyat Gör", "Fiyatları Gör", "Fiyat Getir",
+    "Fiyatları Getir", "Fiyat Hesapla", "Fiyatları Hesapla", "Teklifleri Görüntüle", "Teklifleri Getir",
+    "Devam Et", "Karşılaştır", "Sorgula", "Doğrula", "Onayla"].map((phrase) => turkishFoldRegex(phrase)),
+  ...["Gönder", "Devam", "İleri", "Hesapla"].map((phrase) => turkishFoldExact(phrase)),
+];
 
 export async function clickSubmit(target) {
   for (const name of SUBMIT_BUTTON_NAMES) {
