@@ -1,10 +1,7 @@
 import sigortaladim from "./sigortaladim.mjs";
 import polinet from "./polinet.mjs";
-import sigortakurdu from "./sigortakurdu.mjs";
 import supersigortam from "./supersigortam.mjs";
 import bisigorta from "./bisigorta.mjs";
-import ibksigorta from "./ibksigorta.mjs";
-import emaxsigorta from "./emaxsigorta.mjs";
 import koalay from "./koalay.mjs";
 import enuygun from "./enuygun.mjs";
 import sigortambir from "./sigortambir.mjs";
@@ -26,11 +23,8 @@ import { FormPortalAdapter } from "../form-adapter.mjs";
 export const genericAdaptersById = {
   sigortaladim,
   polinet,
-  sigortakurdu,
   supersigortam,
   bisigorta,
-  ibksigorta,
-  emaxsigorta,
   koalay,
   enuygun,
   sigortambir,
