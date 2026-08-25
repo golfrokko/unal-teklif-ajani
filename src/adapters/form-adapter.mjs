@@ -1068,6 +1068,7 @@ export async function waitForOutcome({ page, target, job, portal, resultTimeoutM
   let lastOffers = [];
   let lastOfferChangeAt = 0;
   let firstOfferAt = 0;
+  const offerCollectionWindowMs = Number(portal?.offerCollectionWindowMs) || OFFER_COLLECTION_WINDOW_MS;
   let lastStage = "Portal formu gönderildi; cevap bekleniyor";
   const track = (status, message, extra) => {
     lastStage = message;
@@ -1153,7 +1154,7 @@ export async function waitForOutcome({ page, target, job, portal, resultTimeoutM
       // Kullanıcı gözlemi: portalların tüm şirketleri listelemesi ~30 saniye
       // sürebiliyor; ilk teklif görüldükten sonra bu süre dolmadan ve üstüne
       // yeni teklif gelmeyi bırakmadan sonuç kapatılmıyor.
-      const collectedLongEnough = Date.now() - firstOfferAt >= OFFER_COLLECTION_WINDOW_MS;
+      const collectedLongEnough = Date.now() - firstOfferAt >= offerCollectionWindowMs;
       const settled = Date.now() - lastOfferChangeAt >= OFFER_SETTLE_MS;
       if (collectedLongEnough && settled) {
         return { status: "completed", message: `${lastOffers.length} şirket teklifi alındı`, offers: lastOffers };

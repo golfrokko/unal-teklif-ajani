@@ -581,7 +581,7 @@ async function waitForIhsanOutcome({ page, target, job, portal, resultTimeoutMs,
         // oluşmaya başlamış). Elimizde teklif varsa (Lion'da rapor edilen
         // durum) akışı burada KESMEYELİM; gerçekten hiç teklif yoksa
         // eskisi gibi hata döndürülür.
-        if (!offers.length && !lastOffers.length) {
+        if (!visibleOffers.length && !lastOffers.length) {
           // Lion gibi sitelerde bu ekran hiç açılamasa bile portal arka
           // planda teklifi zaten oluşturmuş olabiliyor; "hata" döndürmeden
           // önce İskenderun'daki gibi "Tekliflerim" geçmiş sekmesinden
