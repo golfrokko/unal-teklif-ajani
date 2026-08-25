@@ -18,8 +18,11 @@ test("doğrulanmış SMS politikaları korunur", () => {
 });
 
 test("PoliçeKes ve Sigorta.la güncel trafik URL'lerini kullanır", () => {
-  assert.equal(portals.find((portal) => portal.id === "policekes").url, "https://www.policekes.com/oto/trafik-sigortasi-satin-al?yenileme=0");
-  assert.equal(portals.find((portal) => portal.id === "sigortala").url, "https://sigorta.la/oto/trafik-sigortasi-satin-al?yenileme=0");
+  assert.equal(portals.find((portal) => portal.id === "policekes").url, "https://www.policekes.com/oto/trafik-sigortasi-satin-al");
+  assert.equal(portals.find((portal) => portal.id === "sigortala").url, "https://sigorta.la/oto/trafik-sigortasi-satin-al");
+  assert.equal(portals.find((portal) => portal.id === "policekes").smsPolicy, "per_query");
+  assert.equal(portals.find((portal) => portal.id === "sigortala").smsPolicy, "per_query");
+  assert.equal(portals.find((portal) => portal.id === "policekes").offerCollectionWindowMs, 60000);
 });
 
 test("Emax, SigortaKurdu ve İBK portal havuzundan tamamen kaldırılmıştır", () => {

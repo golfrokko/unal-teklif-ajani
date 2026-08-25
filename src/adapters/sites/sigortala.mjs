@@ -1,8 +1,5 @@
-import { FormPortalAdapter } from "../form-adapter.mjs";
+import { PolisoftPortalAdapter } from "./polisoft-flow.mjs";
 
-// Sigorta.la (sigortala) — genel karşılaştırma sitesi akışını kullanır.
-// Siteye özel bir DOM/akış farkı canlı ortamda doğrulandığında, bu dosya
-// FormPortalAdapter'ı miras alıp yalnız farklı olan kısmı (ör. giriş adımı,
-// alan eşlemesi) override edecek şekilde genişletilebilir; şu an ortak
-// mantığın aynısını kullanıyor.
-export default new FormPortalAdapter();
+// Sigorta.la'da yenileme kartına tıklanınca kişisel bilgi formu doğrudan
+// açılır; başlangıçta ayrıca "Devam" düğmesi yoktur.
+export default new PolisoftPortalAdapter({ continueAfterSelection: false });
