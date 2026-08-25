@@ -6,6 +6,7 @@ import {
   detectCaptcha,
   dismissNoPopup,
   fillOtpCode,
+  fillFirst,
   fillSplitRegistrationIfPresent,
   fillVisibleInputsByOrder,
   findOtpInput,
@@ -83,10 +84,13 @@ export class SigortambirAdapter extends FormPortalAdapter {
       await page.waitForTimeout(1500);
     }
 
-    // 3) Meslek sayfası ("Diğer" seçili gelir) -> Devam Et
-    await setState("filling", "Meslek ekranı geçiliyor");
+    // 3) Meslek sayfasında "Diğer" açıkça seçilir -> Devam Et
+    await setState("filling", "Meslek olarak Diğer seçiliyor");
     const professionTarget = await resolveTarget(page, portal);
     await dismissNoPopup(professionTarget);
+    await fillFirst(professionTarget, "Diğer",
+      ['select[name*="meslek" i]', 'select[name*="occupation" i]', 'input[name*="meslek" i]'],
+      ["Meslek", "Mesleğiniz"]);
     await clickNamedButton(professionTarget, [turkishFoldRegex("Devam Et")]).catch(() => {});
     await page.waitForTimeout(1200);
     if (isCancelled()) return cancelled();
@@ -96,6 +100,7 @@ export class SigortambirAdapter extends FormPortalAdapter {
     const registrationTarget = await resolveTarget(page, portal);
     await clickNamedButton(registrationTarget, [
       turkishFoldRegex("Evet, biliyorum"),
+      turkishFoldRegex("Evet biliyorum"),
       turkishFoldRegex("Evet"),
     ], { maxTextLength: 24 }).catch(() => {});
     await page.waitForTimeout(900);
@@ -121,10 +126,15 @@ export class SigortambirAdapter extends FormPortalAdapter {
       await clickNamedButton(egmTarget, [turkishFoldRegex("Devam Et")]) ? true : null
     ), 40000);
 
+    const quoteTarget = await resolveTarget(page, portal);
+    await this.#waitFor(page, async () => (
+      await clickNamedButton(quoteTarget, [turkishFoldRegex("Teklif Al")]) ? true : null
+    ), 20000);
+
     await setState("submitted", "Teklifler bekleniyor");
     const outcomeTarget = await resolveTarget(page, portal);
     const attemptedStages = new Set([await formSignature(outcomeTarget)]);
-    return waitForOutcome({ page, target: outcomeTarget, job, portal, resultTimeoutMs, requestOtp, requestCaptchaSolve, setState, isCancelled, attemptedStages });
+    return waitForOutcome({ page, target: outcomeTarget, job, portal: { ...portal, offerCollectionWindowMs: 60000 }, resultTimeoutMs: Math.max(Number(resultTimeoutMs) || 0, 120000), requestOtp, requestCaptchaSolve, setState, isCancelled, attemptedStages });
   }
 
   #splitRegistration(registration) {

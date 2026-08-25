@@ -6,6 +6,7 @@ import {
   fillQuoteForm,
   formSignature,
   pageState,
+  resolveTarget,
   turkishFoldExact,
   visibleText,
   waitForOutcome,
@@ -89,7 +90,18 @@ async function hasPersonalForm(target) {
   for (let index = 0; index < count; index += 1) {
     if (await candidates.nth(index).isVisible({ timeout: 250 }).catch(() => false)) return true;
   }
-  return false;
+  // PoliçeKes'in yeni sürümünde input name/id değerleri derleme sırasında
+  // kısaltılabiliyor; ekranda form başlığı ve yeterli sayıda görünür metin
+  // alanı varsa formu yalnız teknik attribute eksikliği yüzünden reddetme.
+  const heading = target.getByText(/Sigortal[ıi] Bilgileriniz/i).first();
+  if (!await heading.isVisible({ timeout: 300 }).catch(() => false)) return false;
+  const visibleInputs = target.locator('input:not([type="hidden"]):not([type="checkbox"]):not([type="radio"])');
+  const inputCount = Math.min(await visibleInputs.count().catch(() => 0), 20);
+  let shown = 0;
+  for (let index = 0; index < inputCount; index += 1) {
+    if (await visibleInputs.nth(index).isVisible({ timeout: 200 }).catch(() => false)) shown += 1;
+  }
+  return shown >= 4;
 }
 
 export class PolisoftPortalAdapter extends FormPortalAdapter {
@@ -103,8 +115,10 @@ export class PolisoftPortalAdapter extends FormPortalAdapter {
     await page.waitForTimeout(700);
     const state = pageState(await visibleText(page));
     if (state) return { state, message: "Portal isteği kabul etmedi" };
-    const opened = await openRenewalFlow(page, page, this);
-    const personalForm = opened && await hasPersonalForm(page);
+    let target = await resolveTarget(page, portal);
+    const opened = await openRenewalFlow(target, page, this);
+    target = await resolveTarget(page, portal);
+    const personalForm = opened && await hasPersonalForm(target);
     return {
       state: personalForm ? "form_detected" : "mapping_required",
       message: personalForm ? "Polisoft kişisel bilgi formu bulundu" : "Aracımın Sigortası Bitiyor akışı açılamadı",
@@ -124,28 +138,30 @@ export class PolisoftPortalAdapter extends FormPortalAdapter {
 
     const initialState = pageState(await visibleText(page));
     if (initialState) return { status: initialState, message: "Portal isteği kabul etmedi" };
-    if (!await openRenewalFlow(page, page, this)) {
+    let target = await resolveTarget(page, portal);
+    if (!await openRenewalFlow(target, page, this)) {
       return { status: "mapping_required", message: "Aracımın Sigortası Bitiyor başlangıç adımı açılamadı" };
     }
-    if (!await hasPersonalForm(page)) {
+    target = await resolveTarget(page, portal);
+    if (!await hasPersonalForm(target)) {
       return { status: "mapping_required", message: "Kişisel/kurumsal bilgi formu bulunamadı" };
     }
 
     await setState("filling", "Kimlik, iletişim ve doğum tarihi bilgileri dolduruluyor");
-    const filled = await fillQuoteForm(page, job, portal);
+    const filled = await fillQuoteForm(target, job, portal);
     if (!filled.identity) {
       return { status: "mapping_required", message: "T.C./VKN alanı eşleştirilemedi" };
     }
-    await acceptPolisoftConsents(page, page);
-    const attemptedStages = new Set([await formSignature(page)]);
-    if (!await clickSubmit(page)) {
+    await acceptPolisoftConsents(target, page);
+    const attemptedStages = new Set([await formSignature(target)]);
+    if (!await clickSubmit(target)) {
       return { status: "mapping_required", message: "Kişisel bilgiler ekranındaki Devam düğmesi bulunamadı" };
     }
 
     await setState("submitted", "Kişisel bilgiler gönderildi; plaka ve ruhsat adımı bekleniyor");
     return waitForOutcome({
       page,
-      target: page,
+      target,
       job,
       portal,
       resultTimeoutMs: Math.max(Number(resultTimeoutMs) || 0, Number(portal.resultTimeoutMs) || 0, 60000),

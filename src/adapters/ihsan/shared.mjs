@@ -473,8 +473,29 @@ async function lookupOfferFromHistory({ page, target, job, portal }) {
   await page.waitForTimeout(1200);
   const historyTarget = await resolveTarget(page, portal);
   const plate = job.vehicle.plate;
-  const row = historyTarget.locator(`tr:has-text("${plate}"), li:has-text("${plate}"), [class*="row" i]:has-text("${plate}")`).first();
-  if (!await row.isVisible({ timeout: 2000 }).catch(() => false)) return null;
+  const normalizedPlate = String(plate || "").replace(/\s+/g, "").toLocaleUpperCase("tr-TR");
+  // İhsan temalarında geçmiş teklifler tablo satırı, kart veya grid hücresi
+  // olarak çizilebiliyor. Plakayı boşluksuz karşılaştırıp, eşleşen yazının
+  // en yakın kart/satır kapsayıcısını seçiyoruz. Araç bilgileri/ekstra bilgi
+  // araması bu kurtarma yolunda kullanılmıyor.
+  const plateTexts = historyTarget.locator("body *").filter({ hasText: new RegExp(String(plate || "").replace(/\s+/g, "\\s*"), "i") });
+  const textCount = Math.min(await plateTexts.count().catch(() => 0), 40);
+  let plateNode = null;
+  let shortestTextLength = Number.POSITIVE_INFINITY;
+  for (let index = 0; index < textCount; index += 1) {
+    const candidate = plateTexts.nth(index);
+    if (!await candidate.isVisible({ timeout: 250 }).catch(() => false)) continue;
+    const candidateText = (await candidate.innerText({ timeout: 300 }).catch(() => "")).replace(/\s+/g, "").toLocaleUpperCase("tr-TR");
+    if (!candidateText.includes(normalizedPlate)) continue;
+    if (candidateText.length < shortestTextLength) {
+      shortestTextLength = candidateText.length;
+      plateNode = candidate;
+    }
+  }
+  if (!plateNode) return null;
+  const container = plateNode.locator("xpath=ancestor-or-self::*[self::tr or self::li or contains(@class,'card') or contains(@class,'offer') or contains(@class,'item')][1]").first();
+  const row = await container.count().catch(() => 0) ? container : plateNode;
+  if (!row || !await row.isVisible({ timeout: 2000 }).catch(() => false)) return null;
   const viewNamePattern = foldAnyPattern(["Teklifleri Görüntüle", "Görüntüle", "İncele"]);
   const viewButton = row.getByRole("button", { name: viewNamePattern }).first();
   const viewLink = row.getByRole("link", { name: viewNamePattern }).first();
@@ -488,10 +509,21 @@ async function lookupOfferFromHistory({ page, target, job, portal }) {
     return true;
   }).catch(() => false);
   if (!clicked) return null;
-  await page.waitForTimeout(1200);
-  const resultTarget = await resolveTarget(page, portal);
-  const text = await visibleText(resultTarget);
-  const offers = extractOffersFromText(text, portal);
+  const deadline = Date.now() + 70000;
+  let offers = [];
+  let firstOfferAt = 0;
+  let lastOfferChangeAt = 0;
+  while (Date.now() < deadline) {
+    const resultTarget = await resolveTarget(page, portal);
+    await clickNamedButton(resultTarget, REVEAL_ALL_OFFERS_BUTTON_NAMES).catch(() => {});
+    await scrollOfferResults(resultTarget);
+    const merged = mergeOffers(offers, extractOffersFromText(await visibleText(resultTarget), portal));
+    if (merged.length !== offers.length) lastOfferChangeAt = Date.now();
+    offers = merged;
+    if (offers.length && !firstOfferAt) firstOfferAt = Date.now();
+    if (firstOfferAt && Date.now() - firstOfferAt >= OFFER_COLLECTION_WINDOW_MS && Date.now() - lastOfferChangeAt >= OFFER_SETTLE_MS) break;
+    await page.waitForTimeout(2000);
+  }
   return offers.length ? offers : null;
 }
 
@@ -573,64 +605,11 @@ async function waitForIhsanOutcome({ page, target, job, portal, resultTimeoutMs,
     const hasDynamicStep = DYNAMIC_STEP_PATTERN.test(text);
     if (hasDynamicStep && !dynamicAttempted) {
       dynamicAttempted = true;
-      await track("filling", "Portalın istediği ek araç bilgileri dolduruluyor");
-      const revealed = await revealDynamicSection(target, page);
-      if (!revealed) {
-        // "Ekstra Bilgiler" etiketi sayfada görünse bile bazen aslında
-        // doldurulacak aktif bir alan kalmamış oluyor (ör. teklifler zaten
-        // oluşmaya başlamış). Elimizde teklif varsa (Lion'da rapor edilen
-        // durum) akışı burada KESMEYELİM; gerçekten hiç teklif yoksa
-        // eskisi gibi hata döndürülür.
-        if (!visibleOffers.length && !lastOffers.length) {
-          // Lion gibi sitelerde bu ekran hiç açılamasa bile portal arka
-          // planda teklifi zaten oluşturmuş olabiliyor; "hata" döndürmeden
-          // önce İskenderun'daki gibi "Tekliflerim" geçmiş sekmesinden
-          // aynı plakanın teklifini son bir kez deniyoruz.
-          const historyOffers = !isCancelled() && await lookupOfferFromHistory({ page, target, job, portal }).catch(() => null);
-          if (historyOffers?.length) return { status: "completed", message: `${historyOffers.length} şirket teklifi geçmiş teklifler sekmesinden alındı`, offers: historyOffers };
-          return { status: "mapping_required", message: "Ekstra araç bilgileri bölümü açılamadı", diagnostics: await pageProfile(target, page) };
-        }
-        await page.waitForTimeout(1200);
-        continue;
-      }
-      const dynamic = await fillIhsanFields(target, job, { includeDynamic: true, page });
-      let changed = ["vehicleType", "yearSelect", "brandSelect", "typeSelect", "yearInput", "chassis", "engine"]
-        .some((key) => dynamic[key]);
-      const missingDynamic = await missingVisibleDynamicFields(target);
-      if (missingDynamic.length) {
-        for (const field of missingDynamic) {
-          if (isCancelled()) return { status: "cancelled", message: "Sorgu iptal edildi" };
-          const choices = field.requestable ? null : (await getSelectOptions(target, field.selector))
-            .filter((option) => !option.disabled && String(option.value || "").trim())
-            .slice(0, 60)
-            .map((option) => ({ value: option.value, label: option.label || option.value }));
-          const value = await requestField(field.label, field.selector, choices).catch(() => null);
-          if (!value) {
-            return {
-              status: "input_required",
-              message: `"${field.label}" bilgisi için panelden yanıt alınamadı`,
-              diagnostics: await pageProfile(target, page),
-            };
-          }
-          const filled = field.requestable
-            ? await target.locator(field.selector).first().fill(value, { timeout: 3000 }).then(() => true).catch(() => false)
-            : await fillSelectByUserValue(target, field.selector, value);
-          if (!filled) {
-            return {
-              status: "input_required",
-              message: `"${field.label}" için girilen "${value}" değeri portalın seçenekleriyle eşleşmedi`,
-              diagnostics: await pageProfile(target, page),
-            };
-          }
-          changed = true;
-        }
-        await track("filling", "Panelden girilen ek bilgiler dolduruldu");
-      }
-      if (changed && await clickSubmit(target)) {
-        await track("submitted", "Ek araç bilgileri gönderildi; portal cevabı bekleniyor");
-        await page.waitForTimeout(1200);
-        continue;
-      }
+      await track("collecting", "Araç bilgileri araması atlandı; plaka geçmiş tekliflerde aranıyor");
+      const historyOffers = !isCancelled() && await lookupOfferFromHistory({ page, target, job, portal }).catch(() => null);
+      if (historyOffers?.length) return { status: "completed", message: `${historyOffers.length} şirket teklifi plaka geçmişinden alındı`, offers: historyOffers };
+      await page.waitForTimeout(2000);
+      continue;
     }
 
     if (VALIDATION_PATTERN.test(text) && dynamicAttempted) {

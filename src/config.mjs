@@ -22,6 +22,9 @@ export const config = Object.freeze({
   maxActiveJobs: boundedNumber(process.env.MAX_ACTIVE_JOBS, 1, 1, 2),
   navigationTimeoutMs: boundedNumber(process.env.NAVIGATION_TIMEOUT_MS, 45000, 10000, 120000),
   resultTimeoutMs: boundedNumber(process.env.RESULT_TIMEOUT_MS, 180000, 30000, 300000),
+  // Bir portal hata durumuna düştüğünde sayfayı hemen kapatmak yerine geç
+  // gelen yanıt/render için son bir bekleme penceresi bırakılır.
+  failureGraceMs: boundedNumber(process.env.FAILURE_GRACE_MS, 30000, 0, 60000),
   otpTimeoutMs: boundedNumber(process.env.OTP_TIMEOUT_MS, 300000, 60000, 600000),
   approvalTimeoutMs: boundedNumber(process.env.APPROVAL_TIMEOUT_MS, 600000, 60000, 1800000),
   historyLookupDelayMs: boundedNumber(process.env.HISTORY_LOOKUP_DELAY_MS, 60000, 0, 180000),

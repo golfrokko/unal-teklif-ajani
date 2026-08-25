@@ -1,7 +1,7 @@
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { getAdapter } from "./adapters/index.mjs";
-import { deduplicateOffers } from "./lib/results.mjs";
+import { deduplicateOffers, extractOffersFromText } from "./lib/results.mjs";
 import { isPortalTerminal, publicJob } from "./lib/store.mjs";
 import { RESEND_SENTINEL, safeMessage } from "./lib/validation.mjs";
 
@@ -342,12 +342,31 @@ export class QueryEngine {
             }),
             });
             if (result.status && FAILURE_PORTAL_STATES.has(result.status)) {
-              result.hasScreenshot = await this.#captureScreenshot(page, job.id, portal.id);
+              const graceMs = Number(this.config.failureGraceMs) || 0;
+              if (graceMs > 0 && !job.cancelRequested) {
+                await page.waitForTimeout(graceMs).catch(() => {});
+              }
+              const lateOffers = await this.#collectLateOffers(page, portal);
+              if (lateOffers.length) {
+                result.status = "completed";
+                result.message = `${lateOffers.length} şirket teklifi gecikmeli portal yanıtından alındı`;
+                result.offers = lateOffers;
+              } else {
+                result.hasScreenshot = await this.#captureScreenshot(page, job.id, portal.id);
+              }
             }
             return result;
           } catch (error) {
             // Callback tamamlanınca sayfa kapanabilir; görüntüyü istisna
             // dışarı taşınmadan, portalın hata ekranı hâlâ açıkken al.
+            const graceMs = Number(this.config.failureGraceMs) || 0;
+            if (graceMs > 0 && !job.cancelRequested) {
+              await page.waitForTimeout(graceMs).catch(() => {});
+            }
+            const lateOffers = await this.#collectLateOffers(page, portal);
+            if (lateOffers.length) {
+              return { status: "completed", message: `${lateOffers.length} şirket teklifi gecikmeli portal yanıtından alındı`, offers: lateOffers };
+            }
             error.hasScreenshot = await this.#captureScreenshot(page, job.id, portal.id);
             throw error;
           }
@@ -416,6 +435,17 @@ export class QueryEngine {
     } catch {
       return false;
     }
+  }
+
+  async #collectLateOffers(page, portal) {
+    const texts = [];
+    const frames = typeof page.frames === "function" ? page.frames() : [page];
+    for (const frame of frames) {
+      if (typeof frame?.locator !== "function") continue;
+      const text = await frame.locator("body").innerText({ timeout: 2500 }).catch(() => "");
+      if (text) texts.push(text);
+    }
+    return deduplicateOffers(extractOffersFromText(texts.join("\n"), portal));
   }
 
   #waitForCaptcha(job, portal, page) {
