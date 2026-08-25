@@ -2,6 +2,15 @@
   min-width: 0;
 }
 
+.failure-screenshot-link {
+  display: inline-block;
+  margin-top: 5px;
+  color: #c2591e;
+  font-size: 7px;
+  font-weight: 850;
+  text-decoration: underline;
+}
+
 .progress-item[data-status="waiting_otp"] .progress-row,
 .progress-item[data-status="waiting_input"] .progress-row {
   border-color: #ffc9a9;

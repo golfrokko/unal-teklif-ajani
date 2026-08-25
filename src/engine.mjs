@@ -307,10 +307,11 @@ export class QueryEngine {
     for (let attempt = 0; attempt <= this.config.retryCount; attempt += 1) {
       try {
         const outcome = await this.browserManager.withPortalPage(portal, async (page) => {
-          const result = await adapter.run({
-            page,
-            portal,
-            job,
+          try {
+            const result = await adapter.run({
+              page,
+              portal,
+              job,
             navigationTimeoutMs: portal.navigationTimeoutMs || this.config.navigationTimeoutMs,
             resultTimeoutMs: portal.resultTimeoutMs || this.config.resultTimeoutMs,
             historyLookupDelayMs: this.config.historyLookupDelayMs,
@@ -339,18 +340,24 @@ export class QueryEngine {
               message: `${portal.name} resim güvenlik kodunu bekliyor`,
               extra: { inputLabel: "Güvenlik kodu", inputKind: "image_captcha", captchaImage: imageDataUrl },
             }),
-          });
-          if (result.status && FAILURE_PORTAL_STATES.has(result.status)) {
-            result.screenshotPath = await this.#captureScreenshot(page, job.id, portal.id);
+            });
+            if (result.status && FAILURE_PORTAL_STATES.has(result.status)) {
+              result.hasScreenshot = await this.#captureScreenshot(page, job.id, portal.id);
+            }
+            return result;
+          } catch (error) {
+            // Callback tamamlanınca sayfa kapanabilir; görüntüyü istisna
+            // dışarı taşınmadan, portalın hata ekranı hâlâ açıkken al.
+            error.hasScreenshot = await this.#captureScreenshot(page, job.id, portal.id);
+            throw error;
           }
-          return result;
         });
         if (outcome.offers?.length) job.results.push(...outcome.offers);
         await this.#setPortalState(job, portal, outcome.status, outcome.message, {
           offerCount: outcome.offers?.length || 0,
           attempt: attempt + 1,
           ...(outcome.diagnostics ? { diagnostics: outcome.diagnostics } : {}),
-          ...(outcome.screenshotPath ? { hasScreenshot: true } : {}),
+          ...(outcome.hasScreenshot ? { hasScreenshot: true } : {}),
         });
         return;
       } catch (error) {
@@ -367,7 +374,10 @@ export class QueryEngine {
           continue;
         }
         const status = /Timeout/i.test(message) ? "timeout" : "error";
-        await this.#setPortalState(job, portal, status, message, { attempt: attempt + 1 });
+        await this.#setPortalState(job, portal, status, message, {
+          attempt: attempt + 1,
+          ...(error.hasScreenshot ? { hasScreenshot: true } : {}),
+        });
         return;
       }
     }
