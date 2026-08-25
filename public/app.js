@@ -1,13 +1,13 @@
-const sampleData = `Ad Soyad: Ahmet Yılmaz
-T.C. / VKN: 12345678901
-Doğum Tarihi: 12.04.1988
-Plaka: 78 SR 283
-Ruhsat Seri No: AB123456
-Tescil Tarihi: 15.03.2008
-Araç: HYUNDAI ACCENT ERA 1.4
-Model Yılı: 2008
+const sampleData = `Ad Soyad: ÖRNEK MÜŞTERİ
+T.C. / VKN: 00000000000
+Doğum Tarihi: 01.01.1990
+Plaka: 00 TEST 000
+Ruhsat Seri No: TEST0000
+Tescil Tarihi: 01.01.2020
+Araç: ÖRNEK OTOMOBİL
+Model Yılı: 2020
 Kullanım Tarzı: Hususi
-E-posta: ahmet.yilmaz@example.com`;
+E-posta: ornek@example.invalid`;
 
 const statusNames = {
   queued: "Sırada",
@@ -17,9 +17,7 @@ const statusNames = {
   collecting: "Teklifler toplanıyor",
   waiting_otp: "SMS kodu bekliyor",
   waiting_input: "Ek bilgi bekleniyor",
-  waiting_approval: "Onayınız bekleniyor",
   waiting_captcha: "CAPTCHA sizi bekliyor",
-  awaiting_continue: "Devam onayınız bekleniyor",
   retrying: "Yeniden deneniyor",
   completed: "Tamamlandı",
   no_offer: "Teklif yok",
@@ -92,7 +90,7 @@ function escapeHtml(value) {
 const LOG_LEVELS = {
   success: ["completed", "no_offer"],
   error: ["error", "timeout", "mapping_required", "input_required", "access_blocked", "auth_required", "manual_required", "rate_limited", "failed"],
-  warn: ["skipped_sms", "cancelled", "interrupted", "retrying", "partial", "waiting_approval", "waiting_captcha", "awaiting_continue"],
+  warn: ["skipped_sms", "cancelled", "interrupted", "retrying", "partial", "waiting_captcha"],
 };
 function logLevelForStatus(status) {
   if (LOG_LEVELS.success.includes(status)) return "success";
@@ -362,9 +360,7 @@ function renderProgress(job) {
     const otpState = otpSubmissionState.get(state.portalId);
     const waitingForOtp = state.status === "waiting_otp";
     const waitingForInput = state.status === "waiting_input";
-    const waitingForApproval = state.status === "waiting_approval";
     const waitingForCaptcha = state.status === "waiting_captcha";
-    const waitingForStep = state.status === "awaiting_continue";
     const inputId = waitingForOtp ? "otp" : escapeHtml(state.inputId || "");
     const inputLabel = waitingForOtp ? "SMS doğrulaması" : escapeHtml(state.inputLabel || "Ek bilgi");
     const inputCopy = waitingForOtp ? "Telefona gelen kodu aşağıya yazın. Kod yalnız bu firmaya gönderilir." : "Portal bu bilgiyi istiyor; aşağıya yazıp gönderin.";
@@ -387,14 +383,6 @@ function renderProgress(job) {
             ${waitingForOtp ? `<button type="button" class="otp-resend" data-portal-id="${portalId}" ${otpState ? "disabled" : ""}>SMS gelmedi mi? Kodu tekrar gönder</button>` : ""}
             ${otpErrorState.has(state.portalId) ? `<p class="otp-inline-error">${escapeHtml(otpErrorState.get(state.portalId))}</p>` : ""}
           </form>` : ""}
-        ${waitingForApproval ? `
-          <div class="approval-inline" data-portal-id="${portalId}">
-            <div class="otp-inline-copy"><strong>${portalName} devam etmek için onay bekliyor</strong><small>${escapeHtml(state.pendingMessage || message)}</small></div>
-            <div class="approval-inline-actions">
-              ${state.hasScreenshot ? `<a href="/api/jobs/${encodeURIComponent(activeJobId || "")}/screenshot/${portalId}" target="_blank" rel="noopener">Ekran görüntüsünü gör</a>` : ""}
-              <button type="button" class="approval-continue" data-portal-id="${portalId}">Devam Et</button>
-            </div>
-          </div>` : ""}
         ${waitingForCaptcha ? `
           <div class="captcha-inline" data-portal-id="${portalId}">
             <div class="otp-inline-copy"><strong>${portalName} güvenlik kontrolü (CAPTCHA) bekliyor</strong><small>Aşağıdaki canlı ekrana tıklayarak CAPTCHA'yı kendiniz çözün; bittiğinde "Devam Et"e basın.</small></div>
@@ -403,16 +391,6 @@ function renderProgress(job) {
             </div>
             <div class="approval-inline-actions">
               <button type="button" class="captcha-continue" data-portal-id="${portalId}">Devam Et, çözdüm</button>
-            </div>
-          </div>` : ""}
-        ${waitingForStep ? `
-          <div class="captcha-inline step-inline" data-portal-id="${portalId}">
-            <div class="otp-inline-copy"><strong>${portalName}: ${escapeHtml(state.pendingMessage || message)}</strong><small>Canlı ekranı inceleyin; isterseniz üzerine tıklayabilirsiniz. Bir sonraki aşamaya geçmek için "Devam Et"e basın.</small></div>
-            <div class="captcha-live-wrap">
-              <img class="captcha-live-image step-live-image" data-portal-id="${portalId}" src="/api/jobs/${encodeURIComponent(activeJobId || "")}/captcha/${portalId}/live?t=${Date.now()}" alt="${portalName} canlı ekran" />
-            </div>
-            <div class="approval-inline-actions">
-              <button type="button" class="step-continue" data-portal-id="${portalId}">Devam Et</button>
             </div>
           </div>` : ""}
       </article>`;
@@ -434,21 +412,17 @@ function renderProgress(job) {
 
 function renderOtp(job) {
   const waiting = Object.values(job.portalStates || {}).filter((state) => state.status === "waiting_otp" || state.status === "waiting_input");
-  const waitingApproval = Object.values(job.portalStates || {}).filter((state) => state.status === "waiting_approval");
   const waitingCaptcha = Object.values(job.portalStates || {}).filter((state) => state.status === "waiting_captcha");
-  const waitingStep = Object.values(job.portalStates || {}).filter((state) => state.status === "awaiting_continue");
   elements["otp-dock"].classList.add("hidden");
   elements["otp-count"].textContent = `${waiting.length} portal panelden bilgi bekliyor`;
   elements["otp-cards"].innerHTML = "";
   document.querySelectorAll(".otp-entry").forEach((form) => form.addEventListener("submit", submitInlineValue));
   document.querySelectorAll(".otp-resend").forEach((button) => button.addEventListener("click", requestResend));
-  document.querySelectorAll(".approval-continue").forEach((button) => button.addEventListener("click", approvePortal));
   document.querySelectorAll(".captcha-continue").forEach((button) => button.addEventListener("click", continueCaptcha));
-  document.querySelectorAll(".step-continue").forEach((button) => button.addEventListener("click", continueStep));
   document.querySelectorAll(".captcha-live-image").forEach((image) => image.addEventListener("click", forwardCaptchaClick));
 
   const waitingIds = new Set(waiting.map((state) => state.portalId));
-  const announceIds = new Set([...waitingIds, ...waitingApproval.map((state) => state.portalId), ...waitingCaptcha.map((state) => state.portalId), ...waitingStep.map((state) => state.portalId)]);
+  const announceIds = new Set([...waitingIds, ...waitingCaptcha.map((state) => state.portalId)]);
   for (const portalId of [...announcedOtpPortals]) {
     if (!announceIds.has(portalId)) announcedOtpPortals.delete(portalId);
   }
@@ -465,7 +439,7 @@ function renderOtp(job) {
   if (freshOtp) {
     announcedOtpPortals.add(freshOtp.portalId);
     window.requestAnimationFrame(() => {
-      const form = [...document.querySelectorAll("#progress-list .otp-entry, #progress-list .approval-inline, #progress-list .captcha-inline")].find((item) => item.dataset.portalId === freshOtp.portalId);
+      const form = [...document.querySelectorAll("#progress-list .otp-entry, #progress-list .captcha-inline")].find((item) => item.dataset.portalId === freshOtp.portalId);
       form?.scrollIntoView({ behavior: "smooth", block: "center" });
       form?.querySelector("input, select")?.focus({ preventScroll: true });
     });
@@ -632,23 +606,6 @@ async function requestResend(event) {
   }
 }
 
-async function approvePortal(event) {
-  const button = event.currentTarget;
-  const portalId = button.dataset.portalId;
-  button.disabled = true;
-  button.textContent = "Devam ediliyor…";
-  try {
-    const response = await fetch(`/api/jobs/${activeJobId}/approve/${portalId}`, { method: "POST" });
-    const body = await response.json();
-    if (!response.ok) throw new Error(body.error || "Onaylanamadı");
-    await pollJob();
-  } catch (error) {
-    showError(error.message);
-    button.disabled = false;
-    button.textContent = "Devam Et";
-  }
-}
-
 const CAPTCHA_VIEWPORT = { width: 1440, height: 1000 };
 
 async function forwardCaptchaClick(event) {
@@ -688,25 +645,6 @@ async function continueCaptcha(event) {
     showError(error.message);
     button.disabled = false;
     button.textContent = "Devam Et, çözdüm";
-  }
-}
-
-// Her aşamada gösterilen canlı ekrandan bir sonraki adıma manuel geçiş
-// (bkz. src/engine.mjs #waitForStepContinue / continueStep).
-async function continueStep(event) {
-  const button = event.currentTarget;
-  const portalId = button.dataset.portalId;
-  button.disabled = true;
-  button.textContent = "Devam ediliyor…";
-  try {
-    const response = await fetch(`/api/jobs/${activeJobId}/step/${portalId}/continue`, { method: "POST" });
-    const body = await response.json();
-    if (!response.ok) throw new Error(body.error || "Devam edilemedi");
-    await pollJob();
-  } catch (error) {
-    showError(error.message);
-    button.disabled = false;
-    button.textContent = "Devam Et";
   }
 }
 
@@ -768,11 +706,8 @@ async function boot() {
     if (health.defaultPhone) elements.phone.value = formatPhone(health.defaultPhone);
     if (portalData.defaultEmail) elements.email.value = portalData.defaultEmail;
     portals = portalData.portals;
-    // Not: sorgular artık eşzamanlı değil, sırayla (bir portal bitmeden
-    // diğeri başlamadan) ve her aşamada canlı ekran + "Devam Et" onayıyla
-    // ilerliyor; eski eşzamanlılık sayıları burada gösterilmiyor.
-    elements["max-concurrency"].textContent = "Sıralı: portallar tek tek, her aşamada onayınızla ilerler";
-    elements["concurrency-stat"].textContent = "Sıralı";
+    elements["max-concurrency"].textContent = `${health.maxConcurrency} İhsan + ${health.genericConcurrency} diğer portal eşzamanlı`;
+    elements["concurrency-stat"].textContent = "Paralel";
     renderPortals();
     const lastChecked = portals.map((portal) => portal.sessionCheckedAt).filter(Boolean).sort().at(-1);
     if (lastChecked) {
