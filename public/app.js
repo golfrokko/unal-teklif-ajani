@@ -368,13 +368,16 @@ function renderProgress(job) {
     const captchaImage = waitingForInput && state.inputKind === "image_captcha" && state.captchaImage
       ? `<img class="captcha-code-image" src="${escapeHtml(state.captchaImage)}" alt="${portalName} güvenlik kodu" />`
       : "";
+    const failureScreenshot = state.hasScreenshot
+      ? `<a class="failure-screenshot-link" href="/api/jobs/${encodeURIComponent(activeJobId || job.id)}/screenshot/${encodeURIComponent(state.portalId)}?t=${Date.now()}" target="_blank" rel="noopener">📷 Hata ekranını gör</a>`
+      : "";
     const field = choices?.length
       ? `<select aria-label="${portalName} ${inputLabel}" required ${otpState ? "disabled" : ""}><option value="">Seçiniz</option>${choices.map((choice) => `<option value="${escapeHtml(choice.value)}">${escapeHtml(choice.label)}</option>`).join("")}</select>`
       : `<input inputmode="${waitingForOtp ? "numeric" : "text"}" autocomplete="${waitingForOtp ? "one-time-code" : "off"}" maxlength="${waitingForOtp ? 8 : 64}" placeholder="${waitingForOtp ? "SMS kodu" : inputLabel}" aria-label="${portalName} ${inputLabel}" required ${otpState ? "disabled" : ""} />`;
     return `
       <article class="progress-item" data-status="${escapeHtml(state.status)}">
         <div class="progress-row" data-status="${escapeHtml(state.status)}">
-          <i></i><div><strong>${portalName}</strong><small>${message}</small></div><b>${escapeHtml(statusNames[state.status] || state.status)}</b>
+          <i></i><div><strong>${portalName}</strong><small>${message}</small>${failureScreenshot}</div><b>${escapeHtml(statusNames[state.status] || state.status)}</b>
         </div>
         ${(waitingForOtp || waitingForInput) ? `
           <form class="otp-entry otp-inline" data-portal-id="${portalId}" data-input-id="${inputId}">

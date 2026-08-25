@@ -63,3 +63,51 @@ test("checkPortalSession, adaptör hata fırlattığında ekran görüntüsü al
   assert.equal(screenshotCalls.length, 1);
   assert.equal(screenshotCalls[0].path, path.join(dataDir, "screenshots", `session-${lion.id}.jpg`));
 });
+
+test("canlı sorgu istisnası sayfa kapanmadan ekran görüntüsü alır ve duruma işler", async () => {
+  const dataDir = await mkdtemp(path.join(tmpdir(), "job-screenshot-"));
+  const screenshotCalls = [];
+  const now = new Date().toISOString();
+  const job = {
+    id: "job-screen-1",
+    createdAt: now,
+    updatedAt: now,
+    status: "queued",
+    mode: "ask_sms",
+    phone: "05454012962",
+    vehicle: {},
+    portalIds: [koalay.id],
+    portalStates: { [koalay.id]: { portalId: koalay.id, portalName: koalay.name, status: "queued" } },
+    results: [],
+  };
+  const engine = new QueryEngine({
+    store: {
+      getJob: () => job,
+      saveJob: async () => {},
+    },
+    events: { publish() {} },
+    browserManager: {
+      withPortalPage: (portal, callback) => callback({
+        goto: async () => { throw new Error("page.goto: Timeout 1000ms exceeded"); },
+        screenshot: async (options) => { screenshotCalls.push(options); },
+      }),
+    },
+    portalRegistry: new Map([[koalay.id, koalay]]),
+    config: {
+      retryCount: 0,
+      maxConcurrency: 1,
+      genericConcurrency: 1,
+      navigationTimeoutMs: 1000,
+      resultTimeoutMs: 1000,
+    },
+    paths: { screenshotsDir: path.join(dataDir, "screenshots") },
+  });
+
+  await engine.executeJob(job.id);
+  await rm(dataDir, { recursive: true, force: true });
+  assert.equal(job.status, "failed");
+  assert.equal(job.portalStates[koalay.id].status, "timeout");
+  assert.equal(job.portalStates[koalay.id].hasScreenshot, true);
+  assert.equal(screenshotCalls.length, 1);
+  assert.equal(screenshotCalls[0].path, path.join(dataDir, "screenshots", `${job.id}-${koalay.id}.jpg`));
+});
